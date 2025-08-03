@@ -1,0 +1,31 @@
+{
+  "screaming_frog_path": "/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe",
+  "export_path": "./exports/",
+  "ignore_extensions": [".pdf", ".jpg", ".png", ".gif", ".css", ".js", ".ico", ".svg"],
+  "min_anchor_length": 3,
+  "exclude_domains": [],
+  "mechanical_selectors": [
+    "nav", "header", "footer", ".menu", ".navigation", 
+    ".breadcrumb", ".pagination", ".sidebar", ".widget"
+  ],
+  "mechanical_anchor_patterns": [
+    "^(accueil|home|menu|navigation)$",
+    "^(suivant|précédent|next|previous|page \\d+)$",
+    "^(lire la suite|en savoir plus|voir plus|read more)$",
+    "^(contact|à propos|mentions légales|cgv|politique)$",
+    "^\\d+$",
+    "^(cliquez ici|cliquer ici|ici|click here)$",
+    "^(retour|back|retour accueil)$"
+  ],
+  "crawl_settings": {
+    "respect_robots": true,
+    "crawl_depth": 10,
+    "crawl_delay": 0.5,
+    "user_agent": "Screaming Frog SEO Spider/18.0"
+  },
+  "analysis_thresholds": {
+    "max_anchor_repetition": 5,
+    "min_editorial_links_per_page": 2,
+    "max_outbound_links_per_page": 100
+  }
+}
