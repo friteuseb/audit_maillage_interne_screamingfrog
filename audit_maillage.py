@@ -554,6 +554,10 @@ class CompleteLinkAuditor:
             quality_analysis = self.analyze_editorial_quality(internal_links, analysis['stats'])
             analysis.update(quality_analysis)
             
+            # Générer les données pour le graphique de réseau
+            network_data = self.generate_network_data(internal_links, column_mapping)
+            analysis['network_data'] = network_data
+            
             # Générer le rapport
             report_file = self.generate_html_report(analysis, website_url, csv_path)
             
@@ -808,6 +812,91 @@ class CompleteLinkAuditor:
         
         return round(final_score, 1)
 
+    def generate_network_data(self, internal_links, column_mapping):
+        """Génère les données pour le graphique de réseau du maillage interne"""
+        nodes = {}
+        edges = []
+        
+        # Ne prendre que les liens éditoriaux pour le graphique
+        editorial_links = [link for link in internal_links if not link.get('is_mechanical', False)]
+        
+        source_col = column_mapping.get('source')
+        dest_col = column_mapping.get('dest')
+        anchor_col = column_mapping.get('anchor')
+        
+        if not source_col or not dest_col:
+            return {'nodes': [], 'edges': []}
+        
+        # Compter les liens entrants pour chaque page
+        inbound_count = {}
+        outbound_count = {}
+        
+        for link in editorial_links:
+            source = link.get(source_col, '').strip()
+            dest = link.get(dest_col, '').strip()
+            
+            if source and dest and source != dest:  # Éviter les auto-liens
+                # Compter les liens entrants
+                inbound_count[dest] = inbound_count.get(dest, 0) + 1
+                outbound_count[source] = outbound_count.get(source, 0) + 1
+                
+                # Ajouter les nœuds
+                nodes[source] = nodes.get(source, {'id': source, 'inbound': 0, 'outbound': 0})
+                nodes[dest] = nodes.get(dest, {'id': dest, 'inbound': 0, 'outbound': 0})
+        
+        # Mettre à jour les compteurs des nœuds
+        for url, count in inbound_count.items():
+            if url in nodes:
+                nodes[url]['inbound'] = count
+        
+        for url, count in outbound_count.items():
+            if url in nodes:
+                nodes[url]['outbound'] = count
+        
+        # Créer les arêtes avec ancres
+        for link in editorial_links:
+            source = link.get(source_col, '').strip()
+            dest = link.get(dest_col, '').strip()
+            anchor = link.get(anchor_col, '').strip() if anchor_col else ''
+            
+            if source and dest and source != dest:
+                edges.append({
+                    'source': source,
+                    'target': dest,
+                    'anchor': anchor[:50] + '...' if len(anchor) > 50 else anchor  # Limiter la longueur
+                })
+        
+        # Limiter le nombre de nœuds pour la performance (garder les plus connectés)
+        if len(nodes) > 100:
+            # Trier par nombre total de connexions (entrants + sortants)
+            sorted_nodes = sorted(nodes.values(), 
+                                key=lambda x: x['inbound'] + x['outbound'], 
+                                reverse=True)[:100]
+            
+            # Filtrer les nœuds et edges
+            kept_urls = {node['id'] for node in sorted_nodes}
+            nodes = {url: data for url, data in nodes.items() if url in kept_urls}
+            edges = [edge for edge in edges if edge['source'] in kept_urls and edge['target'] in kept_urls]
+        
+        # Simplifier les URLs pour l'affichage
+        for node in nodes.values():
+            try:
+                parsed = urlparse(node['id'])
+                # Garder seulement le chemin, sans le domaine
+                display_path = parsed.path.rstrip('/')
+                if not display_path:
+                    display_path = '/'
+                elif len(display_path) > 30:
+                    display_path = display_path[:27] + '...'
+                node['label'] = display_path
+            except:
+                node['label'] = node['id'][:30] + '...' if len(node['id']) > 30 else node['id']
+        
+        return {
+            'nodes': list(nodes.values()),
+            'edges': edges[:500]  # Limiter les arêtes pour la performance
+        }
+
     def generate_html_report(self, analysis, website_url, source_file):
         """Génère le rapport HTML"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -855,7 +944,14 @@ class CompleteLinkAuditor:
                 .keyword-tag {{ background: #e9ecef; padding: 5px 10px; border-radius: 15px; font-size: 0.85em; }}
                 .chart-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }}
                 .chart {{ background: white; padding: 15px; border-radius: 8px; text-align: center; }}
+                #network-graph {{ width: 100%; height: 600px; border: 1px solid #e1e5e9; border-radius: 8px; background: white; }}
+                .network-controls {{ margin: 15px 0; text-align: center; }}
+                .network-controls button {{ margin: 0 5px; padding: 8px 16px; border: 1px solid #007bff; background: white; color: #007bff; border-radius: 4px; cursor: pointer; }}
+                .network-controls button:hover {{ background: #007bff; color: white; }}
+                .network-controls button.active {{ background: #007bff; color: white; }}
+                .tooltip {{ position: absolute; background: rgba(0,0,0,0.8); color: white; padding: 8px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000; }}
             </style>
+            <script src="https://d3js.org/d3.v7.min.js"></script>
         </head>
         <body>
             <div class="container">
@@ -908,6 +1004,209 @@ class CompleteLinkAuditor:
             html_content += """<span style="color: #dc3545;">Qualité à améliorer</span></p>"""
         
         html_content += "</div>"
+        
+        # Graphique de réseau du maillage interne
+        if 'network_data' in analysis and analysis['network_data']['nodes']:
+            network_data = analysis['network_data']
+            html_content += f"""
+            <div class="section">
+                <h2>🕸️ Graphique du Maillage Interne</h2>
+                <p>Visualisation interactive des liens éditoriaux entre les pages. La taille des nœuds correspond au nombre de liens entrants.</p>
+                
+                <div class="network-controls">
+                    <button onclick="resetZoom()" class="active">Réinitialiser vue</button>
+                    <button onclick="toggleLabels()">Basculer libellés</button>
+                    <button onclick="highlightOrphans()">Surligner orphelines</button>
+                </div>
+                
+                <div id="network-graph"></div>
+                
+                <p style="margin-top: 15px; color: #6c757d; font-size: 0.9em;">
+                    <strong>Légende:</strong> 
+                    🔵 Taille = liens entrants | 
+                    🟢 Vert = bien connecté | 
+                    🟡 Jaune = moyennement connecté | 
+                    🔴 Rouge = peu connecté
+                </p>
+            </div>
+            
+            <script>
+            // Données du réseau
+            const networkData = {json.dumps(network_data, ensure_ascii=False)};
+            
+            // Configuration du graphique
+            const width = 1160;
+            const height = 600;
+            const margin = {{top: 20, right: 20, bottom: 20, left: 20}};
+            
+            // Créer le SVG
+            const svg = d3.select("#network-graph")
+                .append("svg")
+                .attr("width", width)
+                .attr("height", height);
+            
+            const g = svg.append("g");
+            
+            // Zoom
+            const zoom = d3.zoom()
+                .scaleExtent([0.1, 3])
+                .on("zoom", function(event) {{
+                    g.attr("transform", event.transform);
+                }});
+            
+            svg.call(zoom);
+            
+            // Échelles pour la taille et couleur des nœuds
+            const maxInbound = d3.max(networkData.nodes, d => d.inbound) || 1;
+            const radiusScale = d3.scaleSqrt()
+                .domain([0, maxInbound])
+                .range([4, 25]);
+            
+            const colorScale = d3.scaleLinear()
+                .domain([0, maxInbound * 0.3, maxInbound * 0.7, maxInbound])
+                .range(['#dc3545', '#ffc107', '#28a745', '#007bff']);
+            
+            // Simulation de forces
+            const simulation = d3.forceSimulation(networkData.nodes)
+                .force("link", d3.forceLink(networkData.edges).id(d => d.id).distance(80))
+                .force("charge", d3.forceManyBody().strength(-300))
+                .force("center", d3.forceCenter(width / 2, height / 2))
+                .force("collision", d3.forceCollide().radius(d => radiusScale(d.inbound) + 2));
+            
+            // Créer les liens
+            const links = g.append("g")
+                .selectAll("line")
+                .data(networkData.edges)
+                .enter().append("line")
+                .attr("stroke", "#999")
+                .attr("stroke-opacity", 0.6)
+                .attr("stroke-width", 1);
+            
+            // Créer les nœuds
+            const nodes = g.append("g")
+                .selectAll("circle")
+                .data(networkData.nodes)
+                .enter().append("circle")
+                .attr("r", d => radiusScale(d.inbound))
+                .attr("fill", d => colorScale(d.inbound))
+                .attr("stroke", "#fff")
+                .attr("stroke-width", 1.5)
+                .call(d3.drag()
+                    .on("start", dragstarted)
+                    .on("drag", dragged)
+                    .on("end", dragended));
+            
+            // Labels des nœuds
+            const labels = g.append("g")
+                .selectAll("text")
+                .data(networkData.nodes)
+                .enter().append("text")
+                .text(d => d.label)
+                .attr("font-size", "10px")
+                .attr("text-anchor", "middle")
+                .attr("dy", ".35em")
+                .attr("fill", "#333")
+                .style("pointer-events", "none")
+                .style("opacity", 0.8);
+            
+            // Tooltip
+            const tooltip = d3.select("body").append("div")
+                .attr("class", "tooltip")
+                .style("opacity", 0);
+            
+            // Events pour les nœuds
+            nodes.on("mouseover", function(event, d) {{
+                    tooltip.transition().duration(200).style("opacity", .9);
+                    tooltip.html(`
+                        <strong>${{d.label}}</strong><br/>
+                        Liens entrants: ${{d.inbound}}<br/>
+                        Liens sortants: ${{d.outbound}}<br/>
+                        <small>${{d.id}}</small>
+                    `)
+                    .style("left", (event.pageX + 10) + "px")
+                    .style("top", (event.pageY - 28) + "px");
+                }})
+                .on("mouseout", function(d) {{
+                    tooltip.transition().duration(500).style("opacity", 0);
+                }});
+            
+            // Animation de la simulation
+            simulation.on("tick", () => {{
+                links
+                    .attr("x1", d => d.source.x)
+                    .attr("y1", d => d.source.y)
+                    .attr("x2", d => d.target.x)
+                    .attr("y2", d => d.target.y);
+                
+                nodes
+                    .attr("cx", d => d.x)
+                    .attr("cy", d => d.y);
+                
+                labels
+                    .attr("x", d => d.x)
+                    .attr("y", d => d.y);
+            }});
+            
+            // Fonctions de contrôle
+            let labelsVisible = true;
+            let orphansHighlighted = false;
+            
+            function resetZoom() {{
+                svg.transition().duration(750).call(
+                    zoom.transform,
+                    d3.zoomIdentity
+                );
+            }}
+            
+            function toggleLabels() {{
+                labelsVisible = !labelsVisible;
+                labels.style("opacity", labelsVisible ? 0.8 : 0);
+                
+                // Mettre à jour le bouton
+                d3.select('button:nth-child(2)')
+                    .classed('active', labelsVisible);
+            }}
+            
+            function highlightOrphans() {{
+                orphansHighlighted = !orphansHighlighted;
+                
+                nodes.attr("stroke", d => {{
+                    if (orphansHighlighted && d.inbound === 0) {{
+                        return "#ff0000";
+                    }}
+                    return "#fff";
+                }})
+                .attr("stroke-width", d => {{
+                    if (orphansHighlighted && d.inbound === 0) {{
+                        return 3;
+                    }}
+                    return 1.5;
+                }});
+                
+                // Mettre à jour le bouton
+                d3.select('button:nth-child(3)')
+                    .classed('active', orphansHighlighted);
+            }}
+            
+            // Fonctions de drag
+            function dragstarted(event, d) {{
+                if (!event.active) simulation.alphaTarget(0.3).restart();
+                d.fx = d.x;
+                d.fy = d.y;
+            }}
+            
+            function dragged(event, d) {{
+                d.fx = event.x;
+                d.fy = event.y;
+            }}
+            
+            function dragended(event, d) {{
+                if (!event.active) simulation.alphaTarget(0);
+                d.fx = null;
+                d.fy = null;
+            }}
+            </script>
+            """
         
         # Qualité des ancres
         if 'anchor_quality' in analysis:
