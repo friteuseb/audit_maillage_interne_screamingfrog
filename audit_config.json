@@ -27,5 +27,12 @@
     "max_anchor_repetition": 5,
     "min_editorial_links_per_page": 2,
     "max_outbound_links_per_page": 100
+  },
+  "semantic_analysis": {
+    "enable_semantic_analysis": true,
+    "similarity_threshold": 0.85,
+    "min_cluster_size": 3,
+    "ai_provider": "openai",
+    "api_key_required": true
   }
 }

@@ -10,6 +10,7 @@ import csv
 import re
 import os
 import json
+import time
 from datetime import datetime
 from collections import Counter
 from urllib.parse import urlparse
@@ -88,7 +89,7 @@ class CompleteLinkAuditor:
         
         return csv_files
 
-    def run_new_crawl(self, website_url):
+    def run_new_crawl(self, website_url, url_filter=None):
         """Lance un nouveau crawl Screaming Frog avec diagnostic"""
         print(f"\n🚀 NOUVEAU CRAWL")
         print("="*50)
@@ -185,26 +186,100 @@ class CompleteLinkAuditor:
         
         print(f"🔍 Chemin final utilisé: '{output_folder}'")
         
+        # Vérifier si les fonctionnalités sémantiques sont disponibles
+        semantic_exports = ""
+        if self.config.get('enable_semantic_analysis', False):
+            semantic_exports = ",Embeddings:All,Content Clusters:Similar Pages"
+            print("🧠 Analyse sémantique activée (nécessite SF v22+ et API AI configurée)")
+        
         crawl_command = [
             sf_path,
             "-headless",
             "-crawl", website_url,
             "--output-folder", output_folder,
             "--export-format", "csv",
-            "--bulk-export", "Links:All Outlinks"
+            "--bulk-export", f"All Outlinks,All Inlinks{semantic_exports}"
         ]
         
-        print(f"🔧 Commande: {' '.join(crawl_command[:3])} [...]")
+        print(f"🔧 Commande complète: {' '.join(crawl_command)}")
+        print(f"🔧 Commande masquée: {' '.join(crawl_command[:3])} [...]")
         
         try:
-            print("⏳ Crawl en cours (cela peut prendre plusieurs minutes)...")
-            result = subprocess.run(
-                crawl_command, 
-                capture_output=True, 
-                text=True, 
-                timeout=3600,
-                cwd=os.path.dirname(sf_path)
+            print("⏳ Crawl en cours...")
+            print("💡 Monitoring en temps réel :")
+            
+            # Lancer le processus sans capturer la sortie pour voir le feedback
+            process = subprocess.Popen(
+                crawl_command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=False,  # Mode binaire pour gérer l'encodage manuellement
+                cwd=os.path.dirname(sf_path),
+                bufsize=1
             )
+            
+            # Afficher la sortie en temps réel
+            output_lines = []
+            start_time = time.time()
+            last_update = start_time
+            initial_files = set(os.listdir(output_folder)) if os.path.exists(output_folder) else set()
+            
+            print("📝 Logs Screaming Frog:")
+            print("-" * 50)
+            
+            while True:
+                raw_line = process.stdout.readline()
+                if not raw_line and process.poll() is not None:
+                    break
+                
+                # Gérer l'encodage avec plusieurs tentatives
+                line = ""
+                for encoding in ['utf-8', 'latin-1', 'cp1252', 'ascii']:
+                    try:
+                        line = raw_line.decode(encoding).strip()
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                
+                if line:
+                    output_lines.append(line)
+                    # Afficher seulement les lignes importantes
+                    if any(keyword in line.lower() for keyword in [
+                        'crawling', 'found', 'discovered', 'completed', 'error', 
+                        'finished', 'exported', 'links', 'pages', 'progress', 'update'
+                    ]):
+                        print(f"📋 {line}")
+                
+                # Afficher un indicateur de progression toutes les 30 secondes
+                current_time = time.time()
+                if current_time - last_update > 30:
+                    elapsed = int(current_time - start_time)
+                    
+                    # Vérifier les nouveaux fichiers créés
+                    if os.path.exists(output_folder):
+                        current_files = set(os.listdir(output_folder))
+                        new_files = current_files - initial_files
+                        if new_files:
+                            print(f"📁 Nouveaux fichiers: {', '.join(new_files)}")
+                    
+                    print(f"⏱️  Temps écoulé: {elapsed//60}m {elapsed%60}s - Crawl en cours...")
+                    last_update = current_time
+            
+            # Attendre la fin du processus
+            return_code = process.wait()
+            total_time = int(time.time() - start_time)
+            
+            print("-" * 50)
+            print(f"⏱️  Durée totale: {total_time//60}m {total_time%60}s")
+            
+            # Créer un objet result compatible
+            class MockResult:
+                def __init__(self, returncode, stdout_lines):
+                    self.returncode = returncode
+                    self.stdout = '\n'.join(stdout_lines)
+                    self.stderr = ''
+            
+            result = MockResult(return_code, output_lines)
             
             # Diagnostic détaillé
             if result.returncode == 0:
@@ -230,18 +305,64 @@ class CompleteLinkAuditor:
                     return None
             else:
                 print(f"❌ Erreur lors du crawl (code: {result.returncode})")
-                if result.stdout:
-                    print(f"📤 Sortie: {result.stdout[:500]}")
-                if result.stderr:
-                    print(f"📥 Erreur: {result.stderr[:500]}")
                 
-                # Suggestions d'erreurs courantes
-                if "access" in result.stderr.lower() or "permission" in result.stderr.lower():
-                    print("💡 Problème de permissions - essayez de lancer en administrateur")
-                elif "network" in result.stderr.lower() or "timeout" in result.stderr.lower():
-                    print("💡 Problème réseau - vérifiez la connectivité et les proxies")
-                elif "license" in result.stderr.lower():
-                    print("💡 Problème de licence - vérifiez votre licence Screaming Frog")
+                # Analyser les logs pour identifier les problèmes
+                output_text = result.stdout.lower()
+                
+                print(f"\n🔍 DEBUG - Code de retour: {result.returncode}")
+                print(f"🔍 DEBUG - Taille de sortie: {len(result.stdout)} caractères")
+                
+                # Rechercher des indices dans les logs
+                if "403" in output_text or "forbidden" in output_text:
+                    print("🚫 Erreur 403 Forbidden détectée")
+                    print("💡 Solutions possibles :")
+                    print("   - Le site bloque les crawlers/bots")
+                    print("   - Ajouter un User-Agent personnalisé dans la config SF")
+                    print("   - Vérifier si le site nécessite une authentification")
+                    print("   - Essayer avec une limite de vitesse plus lente")
+                elif "404" in output_text or "not found" in output_text:
+                    print("🔍 Erreur 404 - URL non trouvée")
+                    print("💡 Vérifiez que l'URL de départ existe bien")
+                    print("💡 Test depuis WSL vers Windows - peut être un problème de réseau")
+                    
+                    # Test rapide de connectivité depuis WSL
+                    try:
+                        test_result = subprocess.run(['curl', '-I', '-s', '--max-time', '10', website_url], 
+                                                   capture_output=True, text=True, timeout=15)
+                        if test_result.returncode == 0 and '200' in test_result.stdout:
+                            print("✅ L'URL est accessible depuis WSL - problème avec Screaming Frog")
+                            print("💡 Essayez de redémarrer Screaming Frog ou vérifiez les paramètres réseau")
+                        else:
+                            print("❌ L'URL n'est pas accessible depuis WSL non plus")
+                    except Exception as e:
+                        print(f"⚠️  Impossible de tester la connectivité: {e}")
+                elif "timeout" in output_text or "connection" in output_text:
+                    print("⏰ Problème de connexion/timeout")
+                    print("💡 Le site met trop de temps à répondre")
+                elif "license" in output_text:
+                    print("📄 Problème de licence Screaming Frog")
+                    print("💡 Vérifiez votre licence ou utilisez la version gratuite")
+                elif "memory" in output_text or "heap" in output_text:
+                    print("💾 Problème de mémoire")
+                    print("💡 Augmentez la mémoire allouée à Screaming Frog")
+                
+                # Afficher une partie des logs pour diagnostic
+                if result.stdout:
+                    print(f"\n📤 Derniers logs (500 caractères):")
+                    print(result.stdout[-500:])
+                
+                # Vérifier si des fichiers ont quand même été créés
+                if os.path.exists(output_folder):
+                    current_files = set(os.listdir(output_folder))
+                    new_files = current_files - initial_files
+                    if new_files:
+                        print(f"\n📁 Fichiers créés malgré l'erreur: {', '.join(new_files)}")
+                        # Essayer de continuer avec les fichiers partiels
+                        csv_files = [f for f in new_files if f.endswith('.csv') and ('outlink' in f.lower() or 'liens_sortants' in f.lower())]
+                        if csv_files:
+                            latest_file = f"{output_folder}/{csv_files[0]}"
+                            print(f"⚠️  Tentative d'analyse du fichier partiel: {latest_file}")
+                            return latest_file
                 
                 return None
                 
@@ -452,7 +573,24 @@ class CompleteLinkAuditor:
             
         return False
 
-    def analyze_csv(self, csv_path, website_url=None):
+    def matches_url_filter(self, row, url_filter, column_mapping):
+        """Vérifie si un lien correspond au filtre d'URL spécifié"""
+        source_col = column_mapping.get('source')
+        dest_col = column_mapping.get('dest')
+        
+        if not source_col or not dest_col:
+            return True  # Si pas de colonnes, garder tout
+        
+        source = row.get(source_col, '').strip()
+        dest = row.get(dest_col, '').strip()
+        
+        # Garder le lien si la source OU la destination correspondent au filtre
+        source_matches = source.startswith(url_filter) if source else False
+        dest_matches = dest.startswith(url_filter) if dest else False
+        
+        return source_matches or dest_matches
+
+    def analyze_csv(self, csv_path, website_url=None, url_filter=None):
         """Analyse un fichier CSV avec gestion d'erreur complète"""
         print(f"\n📊 ANALYSE DU FICHIER CSV")
         print("="*50)
@@ -481,6 +619,18 @@ class CompleteLinkAuditor:
                 print("⚠️  URL du site manquante - certaines analyses peuvent être limitées")
             else:
                 print(f"🌐 Site analysé: {website_url}")
+                
+            if url_filter:
+                print(f"🎯 Filtrage activé: {url_filter}")
+                # Filtrer les lignes selon le préfixe d'URL
+                original_count = len(rows)
+                rows = [row for row in rows if self.matches_url_filter(row, url_filter, column_mapping)]
+                filtered_count = len(rows)
+                print(f"📊 Filtrage: {original_count:,} → {filtered_count:,} liens ({original_count-filtered_count:,} supprimés)")
+                
+                if filtered_count == 0:
+                    print("❌ Aucun lien ne correspond au filtre spécifié")
+                    return None
             
             # Identifier les colonnes importantes
             column_mapping = self.identify_columns(fieldnames)
@@ -554,12 +704,23 @@ class CompleteLinkAuditor:
             quality_analysis = self.analyze_editorial_quality(internal_links, analysis['stats'])
             analysis.update(quality_analysis)
             
+            # Analyser la qualité du contenu si les fichiers sont disponibles
+            content_analysis = self.analyze_content_quality(csv_path, website_url, url_filter)
+            if content_analysis:
+                analysis['content_quality'] = content_analysis
+            
+            # Analyser les clusters sémantiques si disponibles
+            if self.config.get('semantic_analysis', {}).get('enable_semantic_analysis', False):
+                semantic_analysis = self.analyze_semantic_clusters(csv_path, website_url, url_filter)
+                if semantic_analysis:
+                    analysis['semantic_clusters'] = semantic_analysis
+            
             # Générer les données pour le graphique de réseau
             network_data = self.generate_network_data(internal_links, column_mapping)
             analysis['network_data'] = network_data
             
             # Générer le rapport
-            report_file = self.generate_html_report(analysis, website_url, csv_path)
+            report_file = self.generate_html_report(analysis, website_url, csv_path, url_filter)
             
             print(f"\n✅ ANALYSE TERMINÉE")
             print("="*50)
@@ -812,6 +973,543 @@ class CompleteLinkAuditor:
         
         return round(final_score, 1)
 
+    def analyze_content_quality(self, csv_path, website_url, url_filter=None):
+        """Analyse la qualité du contenu en cherchant les fichiers CSV supplémentaires"""
+        base_path = os.path.dirname(csv_path)
+        content_data = {}
+        
+        # Fichiers CSV à analyser
+        csv_files = {
+            'word_count': ['word_count', 'nombre_mots', 'wordcount'],
+            'page_titles': ['page_titles', 'titles', 'titres'],
+            'h1': ['h1', 'h1_1'],
+            'internal': ['internal', 'pages_internes', 'all_pages']
+        }
+        
+        print(f"\n🔍 ANALYSE DE QUALITÉ DU CONTENU")
+        print("="*50)
+        
+        # Chercher les fichiers dans le dossier
+        available_files = {}
+        if os.path.exists(base_path):
+            for file in os.listdir(base_path):
+                if file.endswith('.csv'):
+                    file_lower = file.lower()
+                    for data_type, patterns in csv_files.items():
+                        if any(pattern in file_lower for pattern in patterns):
+                            available_files[data_type] = os.path.join(base_path, file)
+                            print(f"✅ Trouvé: {data_type} -> {file}")
+        
+        if not available_files:
+            print("⚠️  Aucun fichier de contenu trouvé - utilisez l'export complet de Screaming Frog")
+            return None
+        
+        # Charger et analyser les données
+        analysis_results = {}
+        
+        # 1. Analyse du nombre de mots
+        if 'word_count' in available_files:
+            word_analysis = self.analyze_word_count(available_files['word_count'], url_filter)
+            if word_analysis:
+                analysis_results['word_analysis'] = word_analysis
+        
+        # 2. Analyse des titres et H1
+        if 'page_titles' in available_files and 'h1' in available_files:
+            title_h1_analysis = self.analyze_title_h1_coherence(
+                available_files['page_titles'], 
+                available_files['h1'], 
+                url_filter
+            )
+            if title_h1_analysis:
+                analysis_results['title_h1_coherence'] = title_h1_analysis
+        
+        # 3. Identification des pages de conversion
+        if 'internal' in available_files:
+            conversion_analysis = self.identify_conversion_pages(available_files['internal'], url_filter)
+            if conversion_analysis:
+                analysis_results['conversion_pages'] = conversion_analysis
+        
+        return analysis_results if analysis_results else None
+
+    def analyze_word_count(self, csv_path, url_filter=None):
+        """Analyse le nombre de mots par page"""
+        try:
+            rows, fieldnames = self.load_csv_file(csv_path)
+            if not rows:
+                return None
+            
+            print(f"📊 Analyse du nombre de mots ({len(rows):,} pages)")
+            
+            # Filtrer si nécessaire
+            if url_filter:
+                original_count = len(rows)
+                rows = [row for row in rows if any(
+                    str(row.get(col, '')).startswith(url_filter) 
+                    for col in row.keys() if 'url' in col.lower() or 'address' in col.lower()
+                )]
+                print(f"🎯 Après filtrage: {len(rows):,} pages ({original_count - len(rows):,} supprimées)")
+            
+            # Identifier la colonne de mots
+            word_col = None
+            url_col = None
+            for col in fieldnames:
+                col_lower = col.lower()
+                if any(term in col_lower for term in ['word', 'mots', 'count']):
+                    word_col = col
+                elif any(term in col_lower for term in ['address', 'url', 'source']):
+                    url_col = col
+            
+            if not word_col or not url_col:
+                print("❌ Colonnes 'word count' ou 'URL' non trouvées")
+                return None
+            
+            # Analyser les données
+            word_counts = []
+            for row in rows:
+                try:
+                    word_count = int(row.get(word_col, 0))
+                    url = row.get(url_col, '')
+                    if word_count >= 0 and url:  # Exclure les valeurs négatives
+                        word_counts.append({'url': url, 'word_count': word_count})
+                except (ValueError, TypeError):
+                    continue
+            
+            if not word_counts:
+                return None
+            
+            # Statistiques
+            counts = [item['word_count'] for item in word_counts]
+            
+            analysis = {
+                'total_pages': len(word_counts),
+                'avg_words': sum(counts) / len(counts),
+                'median_words': sorted(counts)[len(counts)//2],
+                'min_words': min(counts),
+                'max_words': max(counts),
+                'thin_content': [item for item in word_counts if item['word_count'] < 300],
+                'rich_content': [item for item in word_counts if item['word_count'] > 1500],
+                'quality_content': [item for item in word_counts if 300 <= item['word_count'] <= 1500]
+            }
+            
+            print(f"📈 Statistiques:")
+            print(f"  - Moyenne: {analysis['avg_words']:.0f} mots")
+            print(f"  - Contenu thin (< 300): {len(analysis['thin_content'])} pages")
+            print(f"  - Contenu riche (> 1500): {len(analysis['rich_content'])} pages")
+            print(f"  - Contenu qualité (300-1500): {len(analysis['quality_content'])} pages")
+            
+            return analysis
+            
+        except Exception as e:
+            print(f"❌ Erreur lors de l'analyse des mots: {e}")
+            return None
+
+    def analyze_title_h1_coherence(self, titles_csv, h1_csv, url_filter=None):
+        """Analyse la cohérence entre les titres et H1"""
+        try:
+            # Charger les deux fichiers
+            titles_data, _ = self.load_csv_file(titles_csv)
+            h1_data, _ = self.load_csv_file(h1_csv)
+            
+            if not titles_data or not h1_data:
+                return None
+            
+            print(f"🏷️  Analyse cohérence Title/H1")
+            
+            # Créer des dictionnaires par URL
+            titles_dict = {}
+            h1_dict = {}
+            
+            # Parser les titres
+            for row in titles_data:
+                url = None
+                title = None
+                for col, value in row.items():
+                    col_lower = col.lower()
+                    if any(term in col_lower for term in ['address', 'url', 'source']):
+                        url = value
+                    elif any(term in col_lower for term in ['title', 'titre']):
+                        title = value
+                
+                if url and title and (not url_filter or url.startswith(url_filter)):
+                    titles_dict[url] = title
+            
+            # Parser les H1
+            for row in h1_data:
+                url = None
+                h1 = None
+                for col, value in row.items():
+                    col_lower = col.lower()
+                    if any(term in col_lower for term in ['address', 'url', 'source']):
+                        url = value
+                    elif 'h1' in col_lower:
+                        h1 = value
+                
+                if url and h1 and (not url_filter or url.startswith(url_filter)):
+                    h1_dict[url] = h1
+            
+            # Analyser la cohérence
+            coherence_analysis = {
+                'total_pages_with_both': 0,
+                'identical': [],
+                'similar': [],
+                'different': [],
+                'missing_h1': [],
+                'missing_title': []
+            }
+            
+            all_urls = set(titles_dict.keys()) | set(h1_dict.keys())
+            
+            for url in all_urls:
+                title = titles_dict.get(url, '')
+                h1 = h1_dict.get(url, '')
+                
+                if not title:
+                    coherence_analysis['missing_title'].append(url)
+                elif not h1:
+                    coherence_analysis['missing_h1'].append(url)
+                else:
+                    coherence_analysis['total_pages_with_both'] += 1
+                    
+                    # Comparaison
+                    if title.strip().lower() == h1.strip().lower():
+                        coherence_analysis['identical'].append({'url': url, 'text': title})
+                    elif self.similarity_score(title, h1) > 0.7:
+                        coherence_analysis['similar'].append({
+                            'url': url, 'title': title, 'h1': h1
+                        })
+                    else:
+                        coherence_analysis['different'].append({
+                            'url': url, 'title': title, 'h1': h1
+                        })
+            
+            print(f"📊 Résultats cohérence:")
+            print(f"  - Pages avec Title et H1: {coherence_analysis['total_pages_with_both']}")
+            print(f"  - Identiques: {len(coherence_analysis['identical'])}")
+            print(f"  - Similaires: {len(coherence_analysis['similar'])}")
+            print(f"  - Différents: {len(coherence_analysis['different'])}")
+            
+            return coherence_analysis
+            
+        except Exception as e:
+            print(f"❌ Erreur lors de l'analyse Title/H1: {e}")
+            return None
+
+    def identify_conversion_pages(self, csv_path, url_filter=None):
+        """Identifie les pages de conversion potentielles"""
+        try:
+            rows, fieldnames = self.load_csv_file(csv_path)
+            if not rows:
+                return None
+            
+            print(f"💰 Identification des pages de conversion")
+            
+            # Patterns de conversion
+            conversion_patterns = {
+                'contact': ['contact', 'nous-contacter', 'contactez', 'get-in-touch'],
+                'achat': ['achat', 'acheter', 'buy', 'purchase', 'commande', 'commander', 'order'],
+                'inscription': ['inscription', 'register', 'signup', 'sign-up', 's-inscrire'],
+                'devis': ['devis', 'quote', 'estimation', 'demande', 'request'],
+                'panier': ['panier', 'cart', 'basket', 'checkout'],
+                'pricing': ['prix', 'pricing', 'tarifs', 'rates', 'cost'],
+                'demo': ['demo', 'demonstration', 'essai', 'trial', 'test']
+            }
+            
+            conversion_pages = {category: [] for category in conversion_patterns.keys()}
+            
+            # Identifier la colonne URL
+            url_col = None
+            title_col = None
+            for col in fieldnames:
+                col_lower = col.lower()
+                if any(term in col_lower for term in ['address', 'url', 'source']):
+                    url_col = col
+                elif any(term in col_lower for term in ['title', 'titre']):
+                    title_col = col
+            
+            if not url_col:
+                print("❌ Colonne URL non trouvée")
+                return None
+            
+            for row in rows:
+                url = row.get(url_col, '').lower()
+                title = row.get(title_col, '').lower() if title_col else ''
+                
+                # Appliquer le filtre
+                if url_filter and not row.get(url_col, '').startswith(url_filter):
+                    continue
+                
+                # Vérifier les patterns
+                full_text = f"{url} {title}"
+                for category, patterns in conversion_patterns.items():
+                    if any(pattern in full_text for pattern in patterns):
+                        conversion_pages[category].append({
+                            'url': row.get(url_col, ''),
+                            'title': row.get(title_col, '') if title_col else '',
+                            'category': category
+                        })
+                        break  # Une page ne peut être que dans une catégorie
+            
+            # Statistiques
+            total_conversion_pages = sum(len(pages) for pages in conversion_pages.values())
+            print(f"📊 Pages de conversion trouvées: {total_conversion_pages}")
+            
+            for category, pages in conversion_pages.items():
+                if pages:
+                    print(f"  - {category.title()}: {len(pages)} pages")
+            
+            return {
+                'by_category': conversion_pages,
+                'total_conversion_pages': total_conversion_pages,
+                'conversion_rate_potential': total_conversion_pages / len(rows) * 100 if rows else 0
+            }
+            
+        except Exception as e:
+            print(f"❌ Erreur lors de l'identification des pages de conversion: {e}")
+            return None
+
+    def similarity_score(self, text1, text2):
+        """Calcule un score de similarité simple entre deux textes"""
+        if not text1 or not text2:
+            return 0
+        
+        # Normaliser
+        t1 = set(text1.lower().split())
+        t2 = set(text2.lower().split())
+        
+        # Jaccard similarity
+        intersection = len(t1 & t2)
+        union = len(t1 | t2)
+        
+        return intersection / union if union > 0 else 0
+
+    def analyze_semantic_clusters(self, csv_path, website_url, url_filter=None):
+        """Analyse les clusters sémantiques générés par Screaming Frog v22+"""
+        base_path = os.path.dirname(csv_path)
+        
+        # Fichiers sémantiques à rechercher
+        semantic_files = {
+            'embeddings': ['embeddings', 'embedding'],
+            'similar_pages': ['similar', 'cluster', 'semantic'],
+            'content_clusters': ['content_cluster', 'clusters']
+        }
+        
+        print(f"\n🧠 ANALYSE SÉMANTIQUE (Screaming Frog v22+)")
+        print("="*50)
+        
+        # Chercher les fichiers sémantiques
+        available_files = {}
+        if os.path.exists(base_path):
+            for file in os.listdir(base_path):
+                if file.endswith('.csv'):
+                    file_lower = file.lower()
+                    for data_type, patterns in semantic_files.items():
+                        if any(pattern in file_lower for pattern in patterns):
+                            available_files[data_type] = os.path.join(base_path, file)
+                            print(f"✅ Trouvé: {data_type} -> {file}")
+        
+        if not available_files:
+            print("⚠️  Aucun fichier sémantique trouvé")
+            print("💡 Activez l'analyse sémantique dans Screaming Frog (Config > API Access > AI)")
+            return None
+        
+        analysis_results = {}
+        
+        # 1. Analyse des pages similaires
+        if 'similar_pages' in available_files:
+            similarity_analysis = self.analyze_similar_pages(available_files['similar_pages'], url_filter)
+            if similarity_analysis:
+                analysis_results['similar_pages'] = similarity_analysis
+        
+        # 2. Analyse des clusters de contenu
+        if 'content_clusters' in available_files:
+            cluster_analysis = self.analyze_content_clusters(available_files['content_clusters'], url_filter)
+            if cluster_analysis:
+                analysis_results['content_clusters'] = cluster_analysis
+        
+        # 3. Recommandations de maillage sémantique
+        if analysis_results:
+            linking_recommendations = self.generate_semantic_linking_recommendations(analysis_results)
+            analysis_results['linking_recommendations'] = linking_recommendations
+        
+        return analysis_results if analysis_results else None
+
+    def analyze_similar_pages(self, csv_path, url_filter=None):
+        """Analyse les pages sémantiquement similaires"""
+        try:
+            rows, fieldnames = self.load_csv_file(csv_path)
+            if not rows:
+                return None
+                
+            print(f"🔍 Analyse de similarité sémantique ({len(rows):,} relations)")
+            
+            # Filtrer si nécessaire
+            if url_filter:
+                original_count = len(rows)
+                rows = [row for row in rows if any(
+                    str(row.get(col, '')).startswith(url_filter) 
+                    for col in row.keys() if 'url' in col.lower() or 'source' in col.lower()
+                )]
+                print(f"🎯 Après filtrage: {len(rows):,} relations ({original_count - len(rows):,} supprimées)")
+            
+            # Identifier les colonnes
+            source_col = target_col = similarity_col = None
+            for col in fieldnames:
+                col_lower = col.lower()
+                if any(term in col_lower for term in ['source', 'page', 'url']) and not target_col:
+                    source_col = col
+                elif any(term in col_lower for term in ['target', 'similar', 'related']) and source_col:
+                    target_col = col
+                elif any(term in col_lower for term in ['similarity', 'score', 'distance']):
+                    similarity_col = col
+            
+            if not source_col or not target_col:
+                print("❌ Colonnes source/target non trouvées")
+                return None
+            
+            # Analyser les relations
+            similarity_threshold = self.config.get('semantic_analysis', {}).get('similarity_threshold', 0.85)
+            high_similarity_pairs = []
+            similarity_scores = []
+            
+            for row in rows:
+                try:
+                    source = row.get(source_col, '')
+                    target = row.get(target_col, '')
+                    score = float(row.get(similarity_col, 0)) if similarity_col else 1.0
+                    
+                    if source and target and score >= similarity_threshold:
+                        high_similarity_pairs.append({
+                            'source': source,
+                            'target': target,
+                            'similarity': score
+                        })
+                        similarity_scores.append(score)
+                        
+                except (ValueError, TypeError):
+                    continue
+            
+            if not high_similarity_pairs:
+                return None
+            
+            analysis = {
+                'total_similar_pairs': len(high_similarity_pairs),
+                'avg_similarity': sum(similarity_scores) / len(similarity_scores),
+                'high_similarity_threshold': similarity_threshold,
+                'similar_page_pairs': high_similarity_pairs[:50],  # Limiter pour la performance
+                'top_similarity_scores': sorted(similarity_scores, reverse=True)[:10]
+            }
+            
+            print(f"📊 Résultats similarité:")
+            print(f"  - Paires très similaires (>{similarity_threshold}): {len(high_similarity_pairs)}")
+            print(f"  - Score moyen: {analysis['avg_similarity']:.3f}")
+            
+            return analysis
+            
+        except Exception as e:
+            print(f"❌ Erreur lors de l'analyse de similarité: {e}")
+            return None
+
+    def analyze_content_clusters(self, csv_path, url_filter=None):
+        """Analyse les clusters de contenu"""
+        try:
+            rows, fieldnames = self.load_csv_file(csv_path)
+            if not rows:
+                return None
+                
+            print(f"🗂️  Analyse des clusters de contenu ({len(rows):,} pages)")
+            
+            # Identifier les colonnes
+            url_col = cluster_col = None
+            for col in fieldnames:
+                col_lower = col.lower()
+                if any(term in col_lower for term in ['url', 'address', 'page']):
+                    url_col = col
+                elif any(term in col_lower for term in ['cluster', 'group', 'category']):
+                    cluster_col = col
+            
+            if not url_col:
+                print("❌ Colonne URL non trouvée")
+                return None
+            
+            # Grouper par clusters
+            clusters = {}
+            for row in rows:
+                url = row.get(url_col, '')
+                cluster_id = row.get(cluster_col, 'unclustered') if cluster_col else 'all_pages'
+                
+                # Appliquer le filtre
+                if url_filter and not url.startswith(url_filter):
+                    continue
+                
+                if cluster_id not in clusters:
+                    clusters[cluster_id] = []
+                clusters[cluster_id].append(url)
+            
+            # Analyser la distribution des clusters
+            min_cluster_size = self.config.get('semantic_analysis', {}).get('min_cluster_size', 3)
+            meaningful_clusters = {k: v for k, v in clusters.items() if len(v) >= min_cluster_size}
+            
+            analysis = {
+                'total_clusters': len(clusters),
+                'meaningful_clusters': len(meaningful_clusters),
+                'total_clustered_pages': sum(len(pages) for pages in clusters.values()),
+                'avg_cluster_size': sum(len(pages) for pages in clusters.values()) / len(clusters) if clusters else 0,
+                'cluster_distribution': {k: len(v) for k, v in meaningful_clusters.items()},
+                'largest_clusters': dict(sorted(meaningful_clusters.items(), key=lambda x: len(x[1]), reverse=True)[:10])
+            }
+            
+            print(f"📊 Résultats clustering:")
+            print(f"  - Clusters totaux: {analysis['total_clusters']}")
+            print(f"  - Clusters significatifs (≥{min_cluster_size}): {analysis['meaningful_clusters']}")
+            print(f"  - Taille moyenne: {analysis['avg_cluster_size']:.1f} pages/cluster")
+            
+            return analysis
+            
+        except Exception as e:
+            print(f"❌ Erreur lors de l'analyse des clusters: {e}")
+            return None
+
+    def generate_semantic_linking_recommendations(self, semantic_data):
+        """Génère des recommandations de maillage basées sur l'analyse sémantique"""
+        recommendations = {
+            'missing_internal_links': [],
+            'cluster_orphans': [],
+            'cross_cluster_opportunities': [],
+            'content_gap_analysis': []
+        }
+        
+        # Analyser les pages similaires sans liens
+        if 'similar_pages' in semantic_data:
+            similar_pairs = semantic_data['similar_pages'].get('similar_page_pairs', [])
+            
+            for i, pair in enumerate(similar_pairs[:20]):  # Limiter à 20 recommandations
+                recommendations['missing_internal_links'].append({
+                    'source_page': pair['source'],
+                    'target_page': pair['target'],
+                    'similarity_score': pair['similarity'],
+                    'recommendation': f"Lien éditorial recommandé (similarité: {pair['similarity']:.3f})",
+                    'priority': 'high' if pair['similarity'] > 0.9 else 'medium'
+                })
+        
+        # Analyser les clusters pour identifier les opportunités
+        if 'content_clusters' in semantic_data:
+            cluster_dist = semantic_data['content_clusters'].get('cluster_distribution', {})
+            
+            for cluster_id, size in cluster_dist.items():
+                if size >= 5:  # Clusters avec au moins 5 pages
+                    recommendations['cross_cluster_opportunities'].append({
+                        'cluster': cluster_id,
+                        'pages_count': size,
+                        'recommendation': f"Créer une page pilier pour le cluster '{cluster_id}' ({size} pages)",
+                        'priority': 'high' if size > 10 else 'medium'
+                    })
+        
+        print(f"💡 Recommandations sémantiques générées:")
+        print(f"  - Liens manquants: {len(recommendations['missing_internal_links'])}")
+        print(f"  - Opportunités inter-clusters: {len(recommendations['cross_cluster_opportunities'])}")
+        
+        return recommendations
+
     def generate_network_data(self, internal_links, column_mapping):
         """Génère les données pour le graphique de réseau du maillage interne"""
         nodes = {}
@@ -897,7 +1595,7 @@ class CompleteLinkAuditor:
             'edges': edges[:500]  # Limiter les arêtes pour la performance
         }
 
-    def generate_html_report(self, analysis, website_url, source_file):
+    def generate_html_report(self, analysis, website_url, source_file, url_filter=None):
         """Génère le rapport HTML"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         report_file = f"{self.config['export_path']}audit_report_{timestamp}.html"
@@ -944,6 +1642,16 @@ class CompleteLinkAuditor:
                 .keyword-tag {{ background: #e9ecef; padding: 5px 10px; border-radius: 15px; font-size: 0.85em; }}
                 .chart-container {{ display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 20px 0; }}
                 .chart {{ background: white; padding: 15px; border-radius: 8px; text-align: center; }}
+                .bar-chart {{ margin: 15px 0; }}
+                .bar-item {{ margin: 8px 0; display: flex; align-items: center; }}
+                .bar-label {{ min-width: 120px; font-size: 0.9em; margin-right: 10px; }}
+                .bar-container {{ flex: 1; display: flex; align-items: center; }}
+                .bar-fill {{ height: 20px; background: linear-gradient(90deg, #36A2EB, #4BC0C0); border-radius: 10px; margin-right: 8px; min-width: 2px; }}
+                .bar-value {{ font-weight: bold; color: #333; min-width: 30px; }}
+                .pie-chart {{ margin: 15px 0; }}
+                .pie-item {{ margin: 8px 0; display: flex; align-items: center; }}
+                .pie-color {{ width: 16px; height: 16px; border-radius: 50%; margin-right: 8px; }}
+                .pie-label {{ font-size: 0.9em; }}
                 #network-graph {{ width: 100%; height: 600px; border: 1px solid #e1e5e9; border-radius: 8px; background: white; }}
                 .network-controls {{ margin: 15px 0; text-align: center; }}
                 .network-controls button {{ margin: 0 5px; padding: 8px 16px; border: 1px solid #007bff; background: white; color: #007bff; border-radius: 4px; cursor: pointer; }}
@@ -956,14 +1664,20 @@ class CompleteLinkAuditor:
         <body>
             <div class="container">
                 <div class="header">
-                    <h1>🔗 Audit de Maillage Interne</h1>
+                    <h1>Audit de maillage interne</h1>
                     <p><strong>Site:</strong> {website_url}</p>
                     <p><strong>Date:</strong> {datetime.now().strftime("%d/%m/%Y à %H:%M")}</p>
                 </div>
                 
                 <div class="meta">
-                    <strong>📄 Fichier source:</strong> {os.path.basename(source_file)}<br>
-                    <strong>⚙️  Script:</strong> Audit automatisé de maillage interne v2.0
+                    <strong>Fichier source :</strong> {os.path.basename(source_file)}<br>
+                    <strong>Script :</strong> Audit automatisé de maillage interne v2.0"""
+        
+        if url_filter:
+            html_content += f"""<br>
+                    <strong>🎯 Filtre appliqué:</strong> URLs commençant par {url_filter}"""
+        
+        html_content += f"""
                 </div>
                 
                 <div class="stats-grid">
@@ -990,7 +1704,7 @@ class CompleteLinkAuditor:
                 </div>
                 
                 <div class="section">
-                    <h2>📊 Score de Qualité Éditorial</h2>
+                    <h2>Score de qualité éditorial</h2>
                     <div class="progress-bar">
                         <div class="progress-fill" style="width: {quality_score}%"></div>
                     </div>
@@ -1010,7 +1724,7 @@ class CompleteLinkAuditor:
             network_data = analysis['network_data']
             html_content += f"""
             <div class="section">
-                <h2>🕸️ Graphique du Maillage Interne</h2>
+                <h2>Graphique du maillage interne</h2>
                 <p>Visualisation interactive des liens éditoriaux entre les pages. La taille des nœuds correspond au nombre de liens entrants.</p>
                 
                 <div class="network-controls">
@@ -1022,11 +1736,11 @@ class CompleteLinkAuditor:
                 <div id="network-graph"></div>
                 
                 <p style="margin-top: 15px; color: #6c757d; font-size: 0.9em;">
-                    <strong>Légende:</strong> 
-                    🔵 Taille = liens entrants | 
-                    🟢 Vert = bien connecté | 
-                    🟡 Jaune = moyennement connecté | 
-                    🔴 Rouge = peu connecté
+                    <strong>Légende :</strong> 
+                    Taille = liens entrants | 
+                    Vert = bien connecté | 
+                    Jaune = moyennement connecté | 
+                    Rouge = peu connecté
                 </p>
             </div>
             
@@ -1208,19 +1922,151 @@ class CompleteLinkAuditor:
             </script>
             """
         
+        # Analyses de qualité du contenu
+        if 'content_quality' in analysis:
+            content_analysis = analysis['content_quality']
+            
+            # Analyse du nombre de mots
+            if 'word_analysis' in content_analysis:
+                word_data = content_analysis['word_analysis']
+                html_content += f"""
+                <div class="section">
+                    <h2>Qualité du contenu</h2>
+                    <h3>Analyse du nombre de mots</h3>
+                    
+                    <div class="chart-container">
+                        <div class="chart">
+                            <h4>Répartition</h4>
+                            <p>Total : <strong>{word_data['total_pages']:,}</strong> pages</p>
+                            <p>📈 Moyenne: <strong>{word_data['avg_words']:.0f}</strong> mots</p>
+                            <p>📊 Médiane: <strong>{word_data['median_words']:.0f}</strong> mots</p>
+                        </div>
+                        <div class="chart">
+                            <h4>Classification</h4>
+                            <p>Contenu thin (&lt;300) : <strong>{len(word_data['thin_content'])}</strong></p>
+                            <p>Contenu qualité (300-1500) : <strong>{len(word_data['quality_content'])}</strong></p>
+                            <p>Contenu riche (&gt;1500) : <strong>{len(word_data['rich_content'])}</strong></p>
+                        </div>
+                    </div>
+                """
+                
+                # Afficher les pages thin content comme recommandations
+                if word_data['thin_content']:
+                    html_content += """
+                    <div class="warning">
+                        <h4>Pages avec contenu thin (&lt; 300 mots)</h4>
+                        <p>Ces pages ont peu de contenu et devraient être évitées pour le maillage entrant ou enrichies :</p>
+                        <ul>
+                    """
+                    for page in word_data['thin_content'][:10]:  # Limiter à 10
+                        html_content += f"<li><strong>{page['word_count']} mots</strong> - {page['url']}</li>"
+                    if len(word_data['thin_content']) > 10:
+                        html_content += f"<li><em>... et {len(word_data['thin_content']) - 10} autres pages</em></li>"
+                    html_content += "</ul></div>"
+                
+                html_content += "</div>"
+            
+            # Analyse de cohérence Title/H1
+            if 'title_h1_coherence' in content_analysis:
+                coherence_data = content_analysis['title_h1_coherence']
+                html_content += f"""
+                <div class="section">
+                    <h2>Cohérence title / H1</h2>
+                    
+                    <div class="chart-container">
+                        <div class="chart">
+                            <h4>Statistiques</h4>
+                            <p>Pages analysées : <strong>{coherence_data['total_pages_with_both']:,}</strong></p>
+                            <p>✅ Identiques: <strong>{len(coherence_data['identical'])}</strong></p>
+                            <p>🟡 Similaires: <strong>{len(coherence_data['similar'])}</strong></p>
+                            <p>🔴 Différents: <strong>{len(coherence_data['different'])}</strong></p>
+                        </div>
+                        <div class="chart">
+                            <h4>Problèmes détectés</h4>
+                            <p>❌ H1 manquant: <strong>{len(coherence_data['missing_h1'])}</strong></p>
+                            <p>❌ Title manquant: <strong>{len(coherence_data['missing_title'])}</strong></p>
+                        </div>
+                    </div>
+                """
+                
+                # Afficher les incohérences
+                if coherence_data['different']:
+                    html_content += """
+                    <div class="warning">
+                        <h4>Pages avec title et H1 très différents</h4>
+                        <p>Ces pages ont une incohérence qui peut nuire au SEO :</p>
+                        <table>
+                            <tr><th>URL</th><th>Title</th><th>H1</th></tr>
+                    """
+                    for page in coherence_data['different'][:5]:  # Limiter à 5
+                        html_content += f"""<tr>
+                            <td class='url'>{page['url']}</td>
+                            <td>{page['title'][:60]}{'...' if len(page['title']) > 60 else ''}</td>
+                            <td>{page['h1'][:60]}{'...' if len(page['h1']) > 60 else ''}</td>
+                        </tr>"""
+                    html_content += "</table></div>"
+                
+                html_content += "</div>"
+            
+            # Analyse des pages de conversion
+            if 'conversion_pages' in content_analysis:
+                conversion_data = content_analysis['conversion_pages']
+                html_content += f"""
+                <div class="section">
+                    <h2>Pages de conversion identifiées</h2>
+                    <p>Ces pages sont cruciales pour votre business et doivent être bien maillées !</p>
+                    
+                    <div class="success">
+                        <p><strong>🎯 {conversion_data['total_conversion_pages']} pages de conversion trouvées</strong> 
+                        ({conversion_data['conversion_rate_potential']:.1f}% du site)</p>
+                    </div>
+                    
+                    <div class="chart-container">
+                """
+                
+                # Afficher par catégorie
+                categories_with_pages = {k: v for k, v in conversion_data['by_category'].items() if v}
+                for category, pages in categories_with_pages.items():
+                    html_content += f"""
+                    <div class="chart">
+                        <h4>{category.title().lower().capitalize()}</h4>
+                        <p><strong>{len(pages)} pages</strong></p>
+                        <ul>
+                    """
+                    for page in pages[:3]:  # Afficher les 3 premières
+                        html_content += f"<li>{page['url']}</li>"
+                    if len(pages) > 3:
+                        html_content += f"<li><em>... et {len(pages) - 3} autres</em></li>"
+                    html_content += "</ul></div>"
+                
+                html_content += """
+                    </div>
+                    
+                    <div class="recommendations">
+                        <h4>Recommandations pour les pages de conversion</h4>
+                        <ul>
+                            <li><strong>Maillage entrant renforcé</strong> : Ces pages doivent recevoir plus de liens éditoriaux</li>
+                            <li><strong>Ancres contextuelles</strong> : Utilisez des ancres qui expliquent la valeur ajoutée</li>
+                            <li><strong>Position stratégique</strong> : Placez les liens dans le contenu, pas seulement en navigation</li>
+                            <li><strong>Pages de contenu vers conversion</strong> : Liez depuis vos articles vers ces pages</li>
+                        </ul>
+                    </div>
+                </div>
+                """
+        
         # Qualité des ancres
         if 'anchor_quality' in analysis:
             anchor_quality = analysis['anchor_quality']
             html_content += f"""
             <div class="section">
-                <h2>🏷️ Qualité des Ancres Éditoriales</h2>
+                <h2>Qualité des ancres éditoriales</h2>
                 <div class="chart-container">
                     <div class="chart">
                         <h4>Répartition</h4>
-                        <p>✅ Bonne qualité: <strong>{len(anchor_quality.get('good_quality', []))}</strong></p>
-                        <p>⚠️ Trop courtes: <strong>{len(anchor_quality.get('too_short', []))}</strong></p>
-                        <p>⚠️ Trop longues: <strong>{len(anchor_quality.get('too_long', []))}</strong></p>
-                        <p>🚫 Sur-optimisées: <strong>{len(anchor_quality.get('keyword_stuffed', []))}</strong></p>
+                        <p>Bonne qualité : <strong>{len(anchor_quality.get('good_quality', []))}</strong></p>
+                        <p>Trop courtes : <strong>{len(anchor_quality.get('too_short', []))}</strong></p>
+                        <p>Trop longues : <strong>{len(anchor_quality.get('too_long', []))}</strong></p>
+                        <p>Sur-optimisées : <strong>{len(anchor_quality.get('keyword_stuffed', []))}</strong></p>
                     </div>
                 </div>
             """
@@ -1252,27 +2098,78 @@ class CompleteLinkAuditor:
             thematic = analysis['thematic_distribution']
             html_content += """
             <div class="section">
-                <h2>🎯 Distribution Thématique</h2>
+                <h2>Distribution thématique</h2>
             """
             
             if thematic.get('top_anchor_keywords'):
+                # Créer des graphiques simples en barres avec CSS
+                keywords_data = list(thematic['top_anchor_keywords'].items())[:10]  # Top 10
+                max_count = max([count for _, count in keywords_data]) if keywords_data else 1
+                
                 html_content += """
-                <h4>Mots-clés principaux dans les ancres</h4>
+                <div class="chart-container">
+                    <div class="chart">
+                        <h4>Mots-clés principaux dans les ancres</h4>
+                        <div class="bar-chart">
+                """
+                
+                for keyword, count in keywords_data:
+                    percentage = (count / max_count) * 100
+                    html_content += f"""
+                            <div class="bar-item">
+                                <span class="bar-label">{keyword}</span>
+                                <div class="bar-container">
+                                    <div class="bar-fill" style="width: {percentage}%"></div>
+                                    <span class="bar-value">{count}</span>
+                                </div>
+                            </div>
+                    """
+                
+                html_content += """
+                        </div>
+                    </div>
+                """
+            
+            if thematic.get('destination_categories'):
+                categories_data = list(thematic['destination_categories'].items())
+                total_categories = sum([count for _, count in categories_data]) if categories_data else 1
+                
+                html_content += """
+                    <div class="chart">
+                        <h4>Types de pages liées</h4>
+                        <div class="pie-chart">
+                """
+                
+                colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF']
+                for i, (category, count) in enumerate(categories_data):
+                    percentage = (count / total_categories) * 100
+                    color = colors[i % len(colors)]
+                    html_content += f"""
+                            <div class="pie-item">
+                                <span class="pie-color" style="background-color: {color}"></span>
+                                <span class="pie-label">{category}: {count} ({percentage:.1f}%)</span>
+                            </div>
+                    """
+                
+                html_content += """
+                        </div>
+                    </div>
+                </div>
+                """
+            else:
+                html_content += """
+                </div>
+                """
+            
+            # Afficher aussi le nuage de mots-clés en complément
+            if thematic.get('top_anchor_keywords'):
+                html_content += """
+                <h4>Nuage de mots-clés</h4>
                 <div class="keyword-cloud">
                 """
                 for keyword, count in list(thematic['top_anchor_keywords'].items())[:15]:
                     html_content += f"""<span class="keyword-tag">{keyword} ({count})</span>"""
                 html_content += "</div>"
-            
-            if thematic.get('destination_categories'):
-                html_content += """
-                <h4>Types de pages liées</h4>
-                <table>
-                    <tr><th>Catégorie</th><th>Nombre de liens</th></tr>
-                """
-                for category, count in thematic['destination_categories'].items():
-                    html_content += f"<tr><td>{category}</td><td><strong>{count}</strong></td></tr>"
-                html_content += "</table>"
             
             html_content += "</div>"
         
@@ -1280,7 +2177,7 @@ class CompleteLinkAuditor:
         if analysis['most_linked_pages']:
             html_content += """
             <div class="section">
-                <h2>📈 Pages les Plus Liées (liens entrants éditoriaux)</h2>
+                <h2>Pages les plus liées (liens entrants éditoriaux)</h2>
                 <table>
                     <tr><th>URL</th><th>Liens entrants</th></tr>
             """
@@ -1292,7 +2189,7 @@ class CompleteLinkAuditor:
         if analysis['orphan_pages']:
             html_content += f"""
             <div class="section">
-                <h2>⚠️ Pages Orphelines</h2>
+                <h2>Pages orphelines</h2>
                 <div class="warning">
                     <p><strong>{len(analysis['orphan_pages'])} pages sans liens entrants éditoriaux:</strong></p>
                     <ul class="orphan-list">
@@ -1307,7 +2204,7 @@ class CompleteLinkAuditor:
         if analysis['over_optimized_anchors']:
             html_content += """
             <div class="section">
-                <h2>⚠️ Ancres Potentiellement Sur-optimisées</h2>
+                <h2>Ancres potentiellement sur-optimisées</h2>
                 <div class="warning">
                     <table>
                         <tr><th>Ancre</th><th>Occurrences</th></tr>
@@ -1319,7 +2216,7 @@ class CompleteLinkAuditor:
         # Recommandations personnalisées
         html_content += f"""
             <div class="recommendations">
-                <h2>💡 Recommandations Prioritaires</h2>
+                <h2>Recommandations prioritaires</h2>
                 <ul>
         """
         
@@ -1351,11 +2248,11 @@ class CompleteLinkAuditor:
             f.write(html_content)
         
         # Générer aussi un export CSV des recommandations
-        csv_export_file = self.generate_csv_export(analysis, website_url, source_file)
+        csv_export_file = self.generate_csv_export(analysis, website_url, source_file, url_filter)
         
         return report_file
 
-    def generate_csv_export(self, analysis, website_url, source_file):
+    def generate_csv_export(self, analysis, website_url, source_file, url_filter=None):
         """Génère un export CSV des recommandations"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         csv_file = f"{self.config['export_path']}recommendations_{timestamp}.csv"
@@ -1484,10 +2381,23 @@ class CompleteLinkAuditor:
                     print("❌ URL requise")
                     continue
                 
-                csv_file = self.run_new_crawl(website_url)
+                # Option de filtrage par préfixe d'URL
+                print("\n🎯 FILTRAGE D'URLs (optionnel)")
+                print("Vous pouvez limiter l'analyse à une section spécifique du site.")
+                print("Exemple: https://monsite.com/blog/ pour ne garder que les pages du blog")
+                
+                url_filter = input("🔍 Préfixe d'URL à conserver (vide = tout le site): ").strip()
+                if url_filter and not url_filter.startswith('http'):
+                    print("⚠️  Le filtre doit commencer par http:// ou https://")
+                    url_filter = None
+                
+                if url_filter:
+                    print(f"✅ Filtrage activé: seules les URLs commençant par '{url_filter}' seront analysées")
+                
+                csv_file = self.run_new_crawl(website_url, url_filter)
                 if csv_file:
                     input("\n⏸️  Appuyez sur Entrée pour lancer l'analyse...")
-                    self.analyze_csv(csv_file, website_url)
+                    self.analyze_csv(csv_file, website_url, url_filter)
                 
             elif choice == '2':
                 # Analyser CSV existant
@@ -1506,7 +2416,17 @@ class CompleteLinkAuditor:
                         if 0 <= file_index < len(csv_files):
                             selected_file = csv_files[file_index]
                             website_url = input("🌐 URL du site (optionnel): ").strip() or None
-                            self.analyze_csv(selected_file, website_url)
+                            
+                            # Option de filtrage pour CSV existant aussi
+                            url_filter = None
+                            if website_url:
+                                print("\n🎯 FILTRAGE D'URLs (optionnel)")
+                                url_filter = input("🔍 Préfixe d'URL à conserver (vide = tout): ").strip() or None
+                                if url_filter and not url_filter.startswith('http'):
+                                    print("⚠️  Le filtre doit commencer par http:// ou https://")
+                                    url_filter = None
+                            
+                            self.analyze_csv(selected_file, website_url, url_filter)
                             break
                         else:
                             print("❌ Numéro invalide")
