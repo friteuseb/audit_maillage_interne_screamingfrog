@@ -13,6 +13,13 @@ import json
 import time
 from datetime import datetime
 from collections import Counter
+
+# Import de l'analyseur sémantique
+try:
+    from semantic_analyzer import get_semantic_analyzer
+    SEMANTIC_ANALYSIS_AVAILABLE = True
+except ImportError:
+    SEMANTIC_ANALYSIS_AVAILABLE = False
 from urllib.parse import urlparse
 import glob
 
@@ -620,6 +627,13 @@ class CompleteLinkAuditor:
             else:
                 print(f"🌐 Site analysé: {website_url}")
                 
+            # Identifier les colonnes importantes AVANT le filtrage
+            column_mapping = self.identify_columns(fieldnames)
+            if not column_mapping['source'] or not column_mapping['dest']:
+                print("❌ Colonnes Source/Destination non trouvées")
+                print(f"📋 Colonnes disponibles: {', '.join(fieldnames)}")
+                return None
+            
             if url_filter:
                 print(f"🎯 Filtrage activé: {url_filter}")
                 # Filtrer les lignes selon le préfixe d'URL
@@ -631,13 +645,6 @@ class CompleteLinkAuditor:
                 if filtered_count == 0:
                     print("❌ Aucun lien ne correspond au filtre spécifié")
                     return None
-            
-            # Identifier les colonnes importantes
-            column_mapping = self.identify_columns(fieldnames)
-            if not column_mapping['source'] or not column_mapping['dest']:
-                print("❌ Colonnes Source/Destination non trouvées")
-                print(f"📋 Colonnes disponibles: {', '.join(fieldnames)}")
-                return None
             
             print(f"📋 Colonnes utilisées:")
             print(f"  - Source: {column_mapping['source']}")
@@ -715,6 +722,26 @@ class CompleteLinkAuditor:
                 if semantic_analysis:
                     analysis['semantic_clusters'] = semantic_analysis
             
+            # Analyse sémantique avancée avec CamemBERT (automatique)
+            if SEMANTIC_ANALYSIS_AVAILABLE:
+                # Collecter les données de pages si disponibles
+                page_data = {}
+                if content_analysis and isinstance(content_analysis, dict):
+                    # Essayer de collecter Title, H1, Meta descriptions depuis les analyses
+                    page_data = self.collect_page_data_for_semantic(csv_path)
+                
+                # Filtrer pour ne garder que les liens éditoriaux
+                editorial_links = [link for link in internal_links if not link.get('is_mechanical', False)]
+                
+                advanced_semantic = self.analyze_semantic_advanced(
+                    editorial_links, 
+                    column_mapping.get('anchor'), 
+                    column_mapping.get('dest'),
+                    page_data
+                )
+                if advanced_semantic:
+                    analysis['advanced_semantic'] = advanced_semantic
+            
             # Générer les données pour le graphique de réseau
             network_data = self.generate_network_data(internal_links, column_mapping)
             analysis['network_data'] = network_data
@@ -725,7 +752,24 @@ class CompleteLinkAuditor:
             print(f"\n✅ ANALYSE TERMINÉE")
             print("="*50)
             print(f"📄 Rapport HTML: {report_file}")
+            
+            # Créer un lien cliquable pour le terminal
+            import os
+            absolute_path = os.path.abspath(report_file)
+            clickable_link = f"file://{absolute_path}"
+            print(f"🔗 Lien cliquable: {clickable_link}")
+            
             print(f"🚫 Pages orphelines: {len(analysis['orphan_pages'])}")
+            
+            # Option pour ouvrir automatiquement
+            try:
+                import webbrowser
+                print(f"\n💡 Ouverture automatique du rapport...")
+                webbrowser.open(clickable_link)
+                print(f"✅ Rapport ouvert dans votre navigateur par défaut")
+            except Exception as e:
+                print(f"⚠️  Impossible d'ouvrir automatiquement: {e}")
+                print(f"💡 Ctrl+Click sur le lien ci-dessus pour l'ouvrir")
             
             return report_file
             
@@ -898,35 +942,611 @@ class CompleteLinkAuditor:
         }
     
     def analyze_thematic_distribution(self, editorial_links, anchor_col, dest_col):
-        """Analyse la distribution thématique des liens"""
-        # Extraire les mots-clés des ancres et URLs
-        anchor_keywords = Counter()
+        """Analyse la distribution thématique des liens avec NLP avancé"""
+        
+        # Stop words français étendus
+        french_stop_words = {
+            'le', 'de', 'et', 'à', 'un', 'il', 'être', 'et', 'en', 'avoir', 'que', 'pour',
+            'dans', 'ce', 'son', 'une', 'sur', 'avec', 'ne', 'se', 'pas', 'tout', 'plus',
+            'par', 'grand', 'en', 'une', 'être', 'et', 'à', 'il', 'avoir', 'ne', 'je', 'son',
+            'que', 'se', 'qui', 'ce', 'dans', 'en', 'du', 'elle', 'au', 'de', 'le', 'un',
+            'nous', 'vous', 'ils', 'elles', 'leur', 'leurs', 'cette', 'ces', 'ses', 'nos',
+            'vos', 'très', 'bien', 'encore', 'toujours', 'déjà', 'aussi', 'puis', 'donc',
+            'ainsi', 'alors', 'après', 'avant', 'depuis', 'pendant', 'comme', 'quand',
+            'comment', 'pourquoi', 'où', 'dont', 'laquelle', 'lequel', 'lesquels', 'desquels',
+            'auquel', 'auxquels', 'duquel', 'desquelles', 'auxquelles', 'celle', 'celui',
+            'ceux', 'celles', 'tout', 'tous', 'toute', 'toutes', 'autre', 'autres', 'même',
+            'mêmes', 'tel', 'telle', 'tels', 'telles', 'quel', 'quelle', 'quels', 'quelles',
+            'voir', 'savoir', 'faire', 'dire', 'aller', 'venir', 'pouvoir', 'vouloir',
+            'devoir', 'falloir', 'prendre', 'donner', 'mettre', 'porter', 'tenir', 'venir',
+            'partir', 'sortir', 'entrer', 'monter', 'descendre', 'passer', 'rester', 'devenir',
+            'sembler', 'paraître', 'apparaître', 'disparaître', 'arriver', 'partir', 'naître',
+            'mourir', 'vivre', 'exister', 'ici', 'là', 'ailleurs', 'partout', 'nulle', 'part',
+            'quelque', 'part', 'jamais', 'toujours', 'souvent', 'parfois', 'quelquefois',
+            'rarement', 'peu', 'beaucoup', 'trop', 'assez', 'tant', 'autant', 'si', 'aussi',
+            'moins', 'davantage', 'plutôt', 'surtout', 'notamment', 'seulement', 'uniquement',
+            'vraiment', 'certainement', 'probablement', 'peut', 'être', 'sans', 'doute',
+            'évidemment', 'naturellement', 'heureusement', 'malheureusement', 'découvrir',
+            'découvrez', 'voir', 'lire', 'consulter', 'cliquer', 'accéder', 'suivre', 'plus',
+            'notre', 'votre', 'leur', 'cette', 'cette', 'ces', 'tous', 'toutes'
+        }
+        
+        # Mots génériques supplémentaires à filtrer
+        generic_words = {
+            'page', 'site', 'web', 'internet', 'online', 'cliquez', 'ici', 'là', 'suivant',
+            'précédent', 'retour', 'accueil', 'home', 'menu', 'navigation', 'lien', 'liens',
+            'article', 'articles', 'actualité', 'actualités', 'news', 'blog', 'post',
+            'plus', 'moins', 'tout', 'tous', 'toute', 'toutes', 'autre', 'autres'
+        }
+        
+        # Combine stop words
+        all_stop_words = french_stop_words.union(generic_words)
+        
+        # Extraire et analyser les ancres
+        anchor_texts = []
         dest_categories = Counter()
         
         for link in editorial_links:
             anchor = link.get(anchor_col, '').strip().lower() if anchor_col else ''
             dest = link.get(dest_col, '') if dest_col else ''
             
-            # Analyser les mots-clés des ancres
-            words = re.findall(r'\b\w{4,}\b', anchor)  # Mots de 4 lettres+
-            for word in words:
-                anchor_keywords[word] += 1
+            if anchor and len(anchor) > 2:
+                anchor_texts.append(anchor)
             
             # Catégoriser les destinations par type de page
             if dest:
-                if any(term in dest.lower() for term in ['blog', 'article', 'actualit']):
+                if any(term in dest.lower() for term in ['blog', 'article', 'actualit', 'news']):
                     dest_categories['Blog/Articles'] += 1
-                elif any(term in dest.lower() for term in ['produit', 'product', 'service']):
+                elif any(term in dest.lower() for term in ['produit', 'product', 'service', 'solution']):
                     dest_categories['Produits/Services'] += 1
-                elif any(term in dest.lower() for term in ['contact', 'about', 'propos']):
+                elif any(term in dest.lower() for term in ['contact', 'about', 'propos', 'equipe', 'team']):
                     dest_categories['Pages institutionnelles'] += 1
+                elif any(term in dest.lower() for term in ['expertise', 'competence', 'metier', 'domaine']):
+                    dest_categories['Expertises'] += 1
+                elif any(term in dest.lower() for term in ['carriere', 'emploi', 'job', 'recrutement']):
+                    dest_categories['Carrières/Emploi'] += 1
                 else:
                     dest_categories['Autres'] += 1
         
+        # Analyse NLP avancée des ancres
+        semantic_keywords = self.extract_semantic_keywords(anchor_texts, all_stop_words)
+        
         return {
-            'top_anchor_keywords': dict(anchor_keywords.most_common(15)),
+            'top_anchor_keywords': semantic_keywords,
             'destination_categories': dict(dest_categories)
         }
+    
+    def extract_semantic_keywords(self, anchor_texts, stop_words):
+        """Extraction de mots-clés sémantiques avec techniques NLP"""
+        
+        # 1. Extraction des mots simples filtrés
+        word_freq = Counter()
+        bigram_freq = Counter()
+        trigram_freq = Counter()
+        
+        for anchor in anchor_texts:
+            # Nettoyer le texte
+            clean_anchor = re.sub(r'[^\w\s]', ' ', anchor.lower())
+            words = [w.strip() for w in clean_anchor.split() if len(w.strip()) >= 3]
+            
+            # Filtrer les stop words et mots génériques
+            meaningful_words = [w for w in words if w not in stop_words and len(w) >= 3]
+            
+            # Compter les mots simples
+            for word in meaningful_words:
+                if len(word) >= 4:  # Mots de 4 lettres minimum
+                    word_freq[word] += 1
+            
+            # Compter les bigrammes (expressions de 2 mots)
+            if len(meaningful_words) >= 2:
+                for i in range(len(meaningful_words) - 1):
+                    bigram = f"{meaningful_words[i]} {meaningful_words[i+1]}"
+                    if len(bigram) >= 8:  # Éviter les bigrammes trop courts
+                        bigram_freq[bigram] += 1
+            
+            # Compter les trigrammes (expressions de 3 mots)
+            if len(meaningful_words) >= 3:
+                for i in range(len(meaningful_words) - 2):
+                    trigram = f"{meaningful_words[i]} {meaningful_words[i+1]} {meaningful_words[i+2]}"
+                    if len(trigram) >= 12:  # Éviter les trigrammes trop courts
+                        trigram_freq[trigram] += 1
+        
+        # 2. Calculer des scores de pertinence (simple TF-IDF-like)
+        total_anchors = len(anchor_texts)
+        scored_keywords = {}
+        
+        # Scorer les mots simples
+        for word, freq in word_freq.items():
+            if freq >= 2:  # Minimum 2 occurrences
+                # Score basé sur fréquence et longueur du mot
+                score = freq * (1 + len(word) / 10)
+                scored_keywords[word] = {
+                    'count': freq,
+                    'score': score,
+                    'type': 'mot'
+                }
+        
+        # Scorer les bigrammes (bonus car plus informatifs)
+        for bigram, freq in bigram_freq.items():
+            if freq >= 2:  # Minimum 2 occurrences
+                score = freq * 2.5  # Bonus pour les expressions
+                scored_keywords[bigram] = {
+                    'count': freq,
+                    'score': score,
+                    'type': 'expression'
+                }
+        
+        # Scorer les trigrammes (bonus encore plus élevé)
+        for trigram, freq in trigram_freq.items():
+            if freq >= 2:  # Minimum 2 occurrences
+                score = freq * 4  # Gros bonus pour les expressions longues
+                scored_keywords[trigram] = {
+                    'count': freq,
+                    'score': score,
+                    'type': 'expression longue'
+                }
+        
+        # 3. Trier par score et retourner le top 15
+        sorted_keywords = sorted(scored_keywords.items(), key=lambda x: x[1]['score'], reverse=True)
+        
+        # Formater pour compatibilité avec l'ancien format
+        result = {}
+        for keyword, data in sorted_keywords[:15]:
+            result[keyword] = data['count']
+        
+        return result
+    
+    def analyze_semantic_advanced(self, editorial_links, anchor_col, dest_col, page_data=None):
+        """Analyse sémantique avancée avec CamemBERT"""
+        if not SEMANTIC_ANALYSIS_AVAILABLE:
+            print("⚠️  Analyse sémantique avancée non disponible (dépendances manquantes)")
+            return None
+        
+        print("\n🧠 ANALYSE SÉMANTIQUE AVANCÉE (CamemBERT)")
+        print("=" * 50)
+        
+        # Obtenir l'analyseur sémantique
+        analyzer = get_semantic_analyzer()
+        
+        # Afficher les stats du cache
+        cache_stats = analyzer.get_cache_stats()
+        print(f"📦 Cache: {cache_stats['files']} entrées ({cache_stats['size_mb']} MB)")
+        
+        results = {}
+        
+        # 1. Clustering sémantique des ancres
+        anchors = []
+        for link in editorial_links:
+            anchor = link.get(anchor_col, '').strip() if anchor_col else ''
+            if anchor and len(anchor) > 3:
+                anchors.append(anchor)
+        
+        if anchors:
+            semantic_clusters = analyzer.cluster_semantic_themes(anchors, min_cluster_size=2)
+            results['semantic_clusters'] = semantic_clusters
+            
+            if semantic_clusters:
+                print(f"🎯 {len(semantic_clusters)} thèmes sémantiques identifiés:")
+                for theme, anchor_list in semantic_clusters.items():
+                    print(f"   • {theme} ({len(anchor_list)} ancres)")
+            else:
+                print("⚠️  Aucun cluster sémantique significatif trouvé")
+        
+        # 2. Analyse de cohérence ancre ↔ contenu (si données disponibles)
+        if page_data:
+            print("🔍 Analyse de cohérence ancres ↔ contenus de pages...")
+            
+            anchor_texts = []
+            page_contents = []
+            
+            for link in editorial_links[:50]:  # Limiter pour les performances
+                anchor = link.get(anchor_col, '').strip() if anchor_col else ''
+                dest_url = link.get(dest_col, '') if dest_col else ''
+                
+                if anchor and dest_url and dest_url in page_data:
+                    anchor_texts.append(anchor)
+                    # Combiner toutes les données textuelles disponibles
+                    content_parts = []
+                    page_info = page_data[dest_url]
+                    
+                    # Priorité aux éléments les plus importants
+                    priority_order = ['titles', 'h1', 'h2', 'h3', 'meta_desc', 'meta_keywords']
+                    for data_type in priority_order:
+                        if data_type in page_info and page_info[data_type]:
+                            content_parts.append(page_info[data_type])
+                    
+                    # Ajouter images alt text si disponible (moins prioritaire)
+                    if 'images_alt' in page_info and page_info['images_alt']:
+                        # Limiter le alt text pour éviter la pollution
+                        alt_text = page_info['images_alt'][:200]  # Max 200 chars
+                        content_parts.append(alt_text)
+                    
+                    combined_content = ' '.join(content_parts)
+                    page_contents.append(combined_content)
+            
+            if anchor_texts and page_contents:
+                coherence_scores = analyzer.analyze_semantic_coherence(anchor_texts, page_contents)
+                avg_coherence = sum(coherence_scores) / len(coherence_scores) if coherence_scores else 0
+                
+                results['coherence_analysis'] = {
+                    'average_score': avg_coherence,
+                    'total_analyzed': len(coherence_scores),
+                    'high_coherence': len([s for s in coherence_scores if s > 0.7]),
+                    'low_coherence': len([s for s in coherence_scores if s < 0.4])
+                }
+                
+                print(f"   📊 Score moyen de cohérence: {avg_coherence:.2f}")
+                print(f"   ✅ Liens très cohérents (>0.7): {results['coherence_analysis']['high_coherence']}")
+                print(f"   ⚠️  Liens peu cohérents (<0.4): {results['coherence_analysis']['low_coherence']}")
+        
+        # 3. Recherche d'opportunités de maillage
+        if page_data and len(page_data) > 1:
+            print("🔍 Recherche d'opportunités de maillage...")
+            
+            # Préparer les contenus enrichis des pages
+            page_contents_for_gaps = {}
+            for url, data in list(page_data.items())[:100]:  # Limiter pour les performances
+                content_parts = []
+                
+                # Utiliser toutes les données disponibles pour une meilleure similarité
+                priority_order = ['titles', 'h1', 'h2', 'h3', 'meta_desc']
+                for data_type in priority_order:
+                    if data_type in data and data[data_type]:
+                        content_parts.append(data[data_type])
+                
+                # Ajouter meta keywords si disponibles (utiles pour la similarité)
+                if 'meta_keywords' in data and data['meta_keywords']:
+                    content_parts.append(data['meta_keywords'])
+                
+                if content_parts:
+                    combined_content = ' '.join(content_parts)
+                    page_contents_for_gaps[url] = combined_content
+            
+            if len(page_contents_for_gaps) > 1:
+                opportunities = analyzer.find_semantic_gaps(page_contents_for_gaps, threshold=0.6)
+                results['link_opportunities'] = opportunities
+                
+                if opportunities:
+                    print(f"   🚀 {len(opportunities)} opportunités de maillage trouvées")
+                    for i, (url1, url2, similarity) in enumerate(opportunities[:5]):
+                        print(f"   {i+1}. Similarité {similarity:.2f}: {url1} ↔ {url2}")
+                else:
+                    print("   ℹ️  Aucune opportunité significative trouvée")
+        
+        return results
+    
+    def collect_page_data_for_semantic(self, csv_base_path):
+        """Collecter les données textuelles des pages pour l'analyse sémantique"""
+        page_data = {}
+        
+        # Obtenir le dossier de base des fichiers CSV
+        base_dir = os.path.dirname(csv_base_path)
+        base_name = os.path.splitext(os.path.basename(csv_base_path))[0]
+        
+        # Patterns de fichiers à chercher (enrichis)
+        file_patterns = {
+            'titles': ['page_titles', 'titles', 'titres'],
+            'h1': ['h1', 'h1_1'],
+            'h2': ['h2', 'h2_1'],
+            'h3': ['h3', 'h3_1'],
+            'meta_desc': ['meta_description', 'description', 'meta_descriptions'],
+            'meta_keywords': ['meta_keywords', 'keywords', 'mots_cles'],
+            'images_alt': ['images', 'image_alt', 'alt_text'],
+            'schema_org': ['schema', 'structured_data', 'schema_org']
+        }
+        
+        # Chercher et charger chaque type de fichier
+        for data_type, patterns in file_patterns.items():
+            found_file = None
+            
+            for pattern in patterns:
+                # Essayer différents formats de noms
+                for filename in [
+                    f"{pattern}.csv",
+                    f"{base_name}_{pattern}.csv",
+                    f"all_{pattern}.csv",
+                    f"tous_les_{pattern}.csv"
+                ]:
+                    filepath = os.path.join(base_dir, filename)
+                    if os.path.exists(filepath):
+                        found_file = filepath
+                        break
+                
+                if found_file:
+                    break
+            
+            # Charger le fichier trouvé
+            if found_file:
+                try:
+                    rows, fieldnames = self.load_csv_file(found_file)
+                    if rows:
+                        print(f"✅ Trouvé pour analyse sémantique: {data_type} -> {os.path.basename(found_file)}")
+                        
+                        # Identifier les colonnes URL et contenu
+                        url_col = None
+                        content_col = None
+                        
+                        for col in fieldnames:
+                            col_lower = col.lower()
+                            if 'address' in col_lower or 'url' in col_lower:
+                                url_col = col
+                            elif self._matches_content_column(data_type, col_lower):
+                                content_col = col
+                        
+                        # Extraire les données
+                        if url_col and content_col:
+                            for row in rows:
+                                url = row.get(url_col, '').strip()
+                                content = row.get(content_col, '').strip()
+                                
+                                if url and content:
+                                    if url not in page_data:
+                                        page_data[url] = {}
+                                    page_data[url][data_type] = content
+                
+                except Exception as e:
+                    print(f"⚠️  Erreur lors du chargement de {found_file}: {e}")
+        
+        if page_data:
+            print(f"📊 Données collectées pour {len(page_data)} pages pour l'analyse sémantique")
+        
+        return page_data
+    
+    def _matches_content_column(self, data_type, col_lower):
+        """Déterminer si une colonne correspond au type de contenu recherché"""
+        column_patterns = {
+            'titles': ['title', 'titre', 'page title'],
+            'h1': ['h1', 'heading 1', 'titre 1'],
+            'h2': ['h2', 'heading 2', 'titre 2'],
+            'h3': ['h3', 'heading 3', 'titre 3'],
+            'meta_desc': ['description', 'meta description', 'meta_description'],
+            'meta_keywords': ['keywords', 'meta keywords', 'meta_keywords', 'mots', 'cles'],
+            'images_alt': ['alt', 'alt text', 'alternative', 'image alt'],
+            'schema_org': ['schema', 'structured', 'microdata', 'json-ld']
+        }
+        
+        if data_type in column_patterns:
+            return any(pattern in col_lower for pattern in column_patterns[data_type])
+        
+        return False
+    
+    def generate_semantic_analysis_section(self, semantic_data):
+        """Générer la section d'analyse sémantique avec graphiques"""
+        
+        html_content = """
+        <div class="section">
+            <h2>Analyse sémantique avancée (CamemBERT)</h2>
+        """
+        
+        # 1. Clustering sémantique avec graphiques
+        if 'semantic_clusters' in semantic_data and semantic_data['semantic_clusters']:
+            clusters = semantic_data['semantic_clusters']
+            total_anchors = sum(len(anchors) for anchors in clusters.values())
+            
+            # Vérifier si l'analyse est pertinente (plus d'un cluster ou diversité suffisante)
+            if len(clusters) == 1:
+                cluster_name = list(clusters.keys())[0]
+                cluster_anchors = list(clusters.values())[0]
+                unique_anchors = set(anchor.lower().strip() for anchor in cluster_anchors)
+                diversity_ratio = len(unique_anchors) / len(cluster_anchors)
+                
+                if diversity_ratio < 0.3:  # Faible diversité
+                    html_content += f"""
+                    <div class="warning">
+                        <h3>⚠️ Analyse sémantique non pertinente</h3>
+                        <p><strong>Problème détecté :</strong> Faible diversité des ancres de liens</p>
+                        <ul>
+                            <li>📊 Ancres analysées : {total_anchors}</li>
+                            <li>🔄 Ancres uniques : {len(unique_anchors)} ({diversity_ratio:.1%})</li>
+                            <li>🎯 Cluster unique : "{cluster_name}"</li>
+                        </ul>
+                        
+                        <h4>💡 Recommandations pour améliorer l'analyse sémantique :</h4>
+                        <ol>
+                            <li><strong>Diversifier les ancres :</strong> Utiliser des termes variés et descriptifs</li>
+                            <li><strong>Éviter la répétition :</strong> "{cluster_anchors[0] if cluster_anchors else 'N/A'}" apparaît {cluster_anchors.count(cluster_anchors[0]) if cluster_anchors else 0} fois</li>
+                            <li><strong>Ancres contextuelles :</strong> Décrire le contenu de destination plutôt que le nom du site</li>
+                            <li><strong>Synonymes et variations :</strong> "services", "expertise", "solutions", "conseil"...</li>
+                            <li><strong>Ancres longue traîne :</strong> "extension bois Amiens", "terrasse composite", "permis de construire"</li>
+                        </ol>
+                        
+                        <div class="success">
+                            <p><strong>✅ Objectif :</strong> Atteindre au moins 30% de diversité pour une analyse sémantique utile</p>
+                        </div>
+                    </div>
+                    """
+                    html_content += "</div>"  # Fermer la section
+                    return html_content
+            
+            # Si on arrive ici, l'analyse est pertinente (diversité suffisante ou plusieurs clusters)
+            html_content += f"""
+            <div class="semantic-analysis">
+                <h3>Thèmes sémantiques identifiés ({len(clusters)} clusters, {total_anchors} ancres)</h3>
+                
+                <div class="chart-container">
+                    <div class="chart">
+                        <h4>Répartition des thèmes</h4>
+                        <div class="pie-chart-semantic">
+            """
+            
+            # Graphique en secteurs des thèmes
+            colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FF8A80', '#FFD93D', '#6C5CE7', '#FD79A8']
+            for i, (theme, anchors) in enumerate(clusters.items()):
+                percentage = (len(anchors) / total_anchors) * 100
+                color = colors[i % len(colors)]
+                html_content += f"""
+                            <div class="pie-item-semantic">
+                                <span class="pie-color" style="background-color: {color}"></span>
+                                <span class="pie-label-semantic">{theme}: {len(anchors)} ancres ({percentage:.1f}%)</span>
+                            </div>
+                """
+            
+            html_content += """
+                        </div>
+                    </div>
+                    
+                    <div class="chart">
+                        <h4>Détail par thème</h4>
+                        <div class="themes-detail">
+            """
+            
+            # Graphique en barres horizontales avec détails
+            max_anchors = max(len(anchors) for anchors in clusters.values())
+            for i, (theme, anchors) in enumerate(clusters.items()):
+                percentage = (len(anchors) / max_anchors) * 100
+                color = colors[i % len(colors)]
+                
+                html_content += f"""
+                            <div class="theme-item">
+                                <div class="theme-header">
+                                    <span class="theme-name">{theme}</span>
+                                    <span class="theme-count">{len(anchors)} ancres</span>
+                                </div>
+                                <div class="theme-bar-container">
+                                    <div class="theme-bar" style="width: {percentage}%; background-color: {color}"></div>
+                                </div>
+                                <div class="theme-examples">
+                """
+                
+                # Afficher quelques exemples d'ancres
+                example_anchors = anchors[:5]  # Top 5 exemples
+                for anchor in example_anchors:
+                    html_content += f'<span class="anchor-example">"{anchor}"</span>'
+                
+                if len(anchors) > 5:
+                    html_content += f'<span class="anchor-more">... et {len(anchors) - 5} autres</span>'
+                
+                html_content += """
+                                </div>
+                            </div>
+                """
+            
+            html_content += """
+                        </div>
+                    </div>
+                </div>
+            """
+            
+            # 3. Nuage de mots par thème
+            html_content += """
+                <h4>Nuages de mots par thème</h4>
+                <div class="word-clouds-container">
+            """
+            
+            for i, (theme, anchors) in enumerate(clusters.items()):
+                color = colors[i % len(colors)]
+                
+                # Extraire les mots les plus fréquents du thème
+                all_words = []
+                for anchor in anchors:
+                    words = anchor.lower().split()
+                    all_words.extend([w for w in words if len(w) > 3])
+                
+                from collections import Counter
+                word_freq = Counter(all_words)
+                top_words = word_freq.most_common(10)
+                
+                html_content += f"""
+                    <div class="word-cloud-theme" style="border-left: 4px solid {color}">
+                        <h5>{theme}</h5>
+                        <div class="word-cloud-mini">
+                """
+                
+                for word, freq in top_words:
+                    # Taille basée sur la fréquence (min 0.8em, max 1.6em)
+                    size = 0.8 + (freq / max(1, max(f for _, f in top_words))) * 0.8
+                    html_content += f'<span class="word-mini" style="font-size: {size}em; color: {color}">{word}</span>'
+                
+                html_content += """
+                        </div>
+                    </div>
+                """
+            
+            html_content += "</div>"
+        
+        # 2. Analyse de cohérence si disponible
+        if 'coherence_analysis' in semantic_data:
+            coherence = semantic_data['coherence_analysis']
+            html_content += f"""
+            <div class="coherence-analysis">
+                <h3>Cohérence sémantique ancres ↔ contenus</h3>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number">{coherence['average_score']:.2f}</div>
+                        <div class="stat-label">Score moyen</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">{coherence['high_coherence']}</div>
+                        <div class="stat-label">Liens très cohérents (>0.7)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">{coherence['low_coherence']}</div>
+                        <div class="stat-label">Liens peu cohérents (<0.4)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">{coherence['total_analyzed']}</div>
+                        <div class="stat-label">Liens analysés</div>
+                    </div>
+                </div>
+            </div>
+            """
+        
+        # 3. Opportunités de maillage si disponibles
+        if 'link_opportunities' in semantic_data and semantic_data['link_opportunities']:
+            opportunities = semantic_data['link_opportunities'][:10]  # Top 10
+            html_content += f"""
+            <div class="opportunities-analysis">
+                <h3>Opportunités de maillage détectées</h3>
+                <p>Pages sémantiquement similaires qui pourraient être liées :</p>
+                <table>
+                    <tr><th>Similarité</th><th>Page 1</th><th>Page 2</th></tr>
+            """
+            
+            for url1, url2, similarity in opportunities:
+                similarity_percent = similarity * 100
+                color = '#28a745' if similarity > 0.8 else '#ffc107' if similarity > 0.6 else '#dc3545'
+                html_content += f"""
+                    <tr>
+                        <td><span style="color: {color}; font-weight: bold">{similarity_percent:.1f}%</span></td>
+                        <td class="url">{url1}</td>
+                        <td class="url">{url2}</td>
+                    </tr>
+                """
+            
+            html_content += "</table></div>"
+        
+        # Si aucun clustering n'est disponible
+        else:
+            html_content += """
+            <div class="warning">
+                <h3>ℹ️ Analyse sémantique non disponible</h3>
+                <p><strong>Raisons possibles :</strong></p>
+                <ul>
+                    <li>🔢 Trop peu d'ancres de liens (minimum 3 requis)</li>
+                    <li>🔄 Diversité insuffisante des ancres (&lt; 30%)</li>
+                    <li>⚙️ Erreur lors du traitement NLP</li>
+                </ul>
+                
+                <h4>💡 Pour activer l'analyse sémantique :</h4>
+                <ol>
+                    <li><strong>Augmenter le nombre de liens éditoriaux</strong> (minimum 10 recommandé)</li>
+                    <li><strong>Diversifier les ancres de liens :</strong>
+                        <ul>
+                            <li>"nos services de construction"</li>
+                            <li>"expertise en extension bois"</li>
+                            <li>"solutions d'aménagement"</li>
+                            <li>"conseil en rénovation"</li>
+                        </ul>
+                    </li>
+                    <li><strong>Éviter les ancres génériques :</strong> "cliquez ici", "en savoir plus"</li>
+                    <li><strong>Utiliser des termes métiers spécifiques</strong> à votre domaine</li>
+                </ol>
+            </div>
+            """
+        
+        html_content += "</div>"  # Fermer la section
+        
+        return html_content
     
     def calculate_editorial_score(self, anchor_quality, total_editorial, editorial_ratio, total_internal_links):
         """Calcule un score de qualité éditorial (0-100)"""
@@ -1652,6 +2272,31 @@ class CompleteLinkAuditor:
                 .pie-item {{ margin: 8px 0; display: flex; align-items: center; }}
                 .pie-color {{ width: 16px; height: 16px; border-radius: 50%; margin-right: 8px; }}
                 .pie-label {{ font-size: 0.9em; }}
+                
+                /* Styles pour l'analyse sémantique */
+                .semantic-analysis {{ margin: 20px 0; }}
+                .pie-chart-semantic {{ margin: 15px 0; }}
+                .pie-item-semantic {{ margin: 8px 0; display: flex; align-items: center; }}
+                .pie-label-semantic {{ font-size: 0.9em; font-weight: 500; }}
+                .themes-detail {{ margin: 15px 0; }}
+                .theme-item {{ margin: 15px 0; padding: 10px; border-radius: 8px; background: #f8f9fa; }}
+                .theme-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }}
+                .theme-name {{ font-weight: bold; color: #333; }}
+                .theme-count {{ font-size: 0.9em; color: #666; }}
+                .theme-bar-container {{ width: 100%; height: 20px; background: #e9ecef; border-radius: 10px; margin-bottom: 8px; }}
+                .theme-bar {{ height: 100%; border-radius: 10px; }}
+                .theme-examples {{ display: flex; flex-wrap: wrap; gap: 5px; }}
+                .anchor-example {{ background: #e3f2fd; padding: 2px 6px; border-radius: 12px; font-size: 0.8em; color: #1976d2; }}
+                .anchor-more {{ font-style: italic; color: #666; font-size: 0.8em; }}
+                
+                /* Nuages de mots par thème */
+                .word-clouds-container {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin: 20px 0; }}
+                .word-cloud-theme {{ background: white; padding: 15px; border-radius: 8px; }}
+                .word-cloud-mini {{ display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }}
+                .word-mini {{ padding: 3px 8px; background: rgba(0,0,0,0.05); border-radius: 12px; font-weight: 500; }}
+                
+                /* Analyses de cohérence et opportunités */
+                .coherence-analysis, .opportunities-analysis {{ margin: 25px 0; padding: 20px; background: #f8f9fa; border-radius: 8px; }}
                 #network-graph {{ width: 100%; height: 600px; border: 1px solid #e1e5e9; border-radius: 8px; background: white; }}
                 .network-controls {{ margin: 15px 0; text-align: center; }}
                 .network-controls button {{ margin: 0 5px; padding: 8px 16px; border: 1px solid #007bff; background: white; color: #007bff; border-radius: 4px; cursor: pointer; }}
@@ -2172,6 +2817,10 @@ class CompleteLinkAuditor:
                 html_content += "</div>"
             
             html_content += "</div>"
+        
+        # Analyse sémantique avancée CamemBERT
+        if 'advanced_semantic' in analysis and analysis['advanced_semantic']:
+            html_content += self.generate_semantic_analysis_section(analysis['advanced_semantic'])
         
         # Pages les plus liées
         if analysis['most_linked_pages']:

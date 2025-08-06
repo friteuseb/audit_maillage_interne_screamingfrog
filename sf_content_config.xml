@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<seospiderconfig>
+  <configuration>
+    <extraction>
+      <!-- Contenu principal -->
+      <custom name="MainContent" 
+              xpath="//article//text() | //section[not(contains(@class, 'shopify-section-header-group') or contains(@class, 'shopify-section-footer-group'))]//text()"
+              type="text"/>
+      
+      <!-- Liens éditoriaux seulement -->
+      <custom name="EditorialLinks" 
+              xpath="//article//a[not(contains(@class, 'button') or contains(@class, 'icon') or contains(@class, 'header__icon'))] | //section[not(contains(@class, 'shopify-section-header-group') or contains(@class, 'shopify-section-footer-group'))]//a[not(contains(@class, 'button') or contains(@class, 'icon') or contains(@class, 'header__icon'))]"
+              type="links"/>
+      
+      <!-- Zone de contenu complète -->
+      <custom name="ContentZone" 
+              xpath="//article | //section[not(contains(@class, 'shopify-section-header-group') or contains(@class, 'shopify-section-footer-group'))]"
+              type="html"/>
+    </extraction>
+    
+    <!-- Paramètres optimisés -->
+    <crawl>
+      <respectRobots>true</respectRobots>
+      <followInternalNofollow>false</followInternalNofollow>
+      <crawlSubdomains>false</crawlSubdomains>
+    </crawl>
+  </configuration>
+</seospiderconfig>
