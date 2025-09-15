@@ -1,5 +1,5 @@
 {
-  "screaming_frog_path": "/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe",
+  "screaming_frog_path": "/usr/bin/screamingfrogseospider",
   "export_path": "./exports/",
   "ignore_extensions": [".pdf", ".jpg", ".png", ".gif", ".css", ".js", ".ico", ".svg"],
   "min_anchor_length": 3,
