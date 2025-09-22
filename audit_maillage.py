@@ -29,8 +29,15 @@ class CompleteLinkAuditor:
         
     def load_config(self, config_file):
         """Charge la configuration"""
+        import platform
+        # Détecter le système d'exploitation pour le chemin par défaut
+        if platform.system() == "Windows":
+            default_sf_path = "C:\\Program Files (x86)\\Screaming Frog SEO Spider\\ScreamingFrogSEOSpiderCli.exe"
+        else:  # Linux/macOS
+            default_sf_path = "/usr/bin/screamingfrogseospider"
+
         default_config = {
-            "screaming_frog_path": "/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe",
+            "screaming_frog_path": default_sf_path,
             "export_path": "./exports/",
             "ignore_extensions": [".pdf", ".jpg", ".png", ".gif", ".css", ".js", ".ico", ".svg"],
             "min_anchor_length": 3
@@ -96,7 +103,63 @@ class CompleteLinkAuditor:
         
         return csv_files
 
-    def run_new_crawl(self, website_url, url_filter=None):
+    def create_screaming_frog_config(self, user_agent=None, attempt_number=1):
+        """Crée un fichier de configuration temporaire pour Screaming Frog"""
+        import tempfile
+        import json as json_module
+
+        # Liste de user-agents pour différentes tentatives
+        fallback_user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+            "Screaming Frog SEO Spider/18.0"  # Dernier recours avec l'agent par défaut
+        ]
+
+        if user_agent is None:
+            # Utiliser l'agent de la config ou un agent de fallback
+            if attempt_number == 1:
+                user_agent = self.config.get('crawl_settings', {}).get('user_agent', fallback_user_agents[0])
+            else:
+                # Essayer différents agents selon le nombre de tentatives
+                agent_index = min(attempt_number - 1, len(fallback_user_agents) - 1)
+                user_agent = fallback_user_agents[agent_index]
+
+        print(f"🔧 Tentative {attempt_number}: User-Agent = {user_agent}")
+
+        # Configuration Screaming Frog en format JSON
+        config_data = {
+            "spider": {
+                "general": {
+                    "userAgent": {
+                        "userAgent": user_agent,
+                        "robotsUserAgent": "Googlebot"  # Pour suivre les directives robots.txt de Googlebot
+                    },
+                    "crawlDelay": self.config.get('crawl_settings', {}).get('crawl_delay', 0.5),
+                    "respectRobots": self.config.get('crawl_settings', {}).get('respect_robots', True),
+                    "maxCrawlDepth": self.config.get('crawl_settings', {}).get('crawl_depth', 10)
+                },
+                "limits": {
+                    "maxPages": 10000  # Limite par défaut pour éviter des crawls trop longs
+                }
+            }
+        }
+
+        # Créer un fichier temporaire pour la configuration
+        temp_config = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json', prefix='sf_config_')
+        try:
+            json_module.dump(config_data, temp_config, indent=2)
+            temp_config.flush()
+            print(f"📁 Config temporaire créée: {temp_config.name}")
+            return temp_config.name
+        except Exception as e:
+            print(f"⚠️  Erreur lors de la création de la config: {e}")
+            return None
+        finally:
+            temp_config.close()
+
+    def run_new_crawl(self, website_url, url_filter=None, max_attempts=3):
         """Lance un nouveau crawl Screaming Frog avec diagnostic"""
         print(f"\n🚀 NOUVEAU CRAWL")
         print("="*50)
@@ -164,173 +227,172 @@ class CompleteLinkAuditor:
             except Exception as e:
                 print(f"⚠️  Impossible de supprimer {old_csv}: {e}")
         
-        # Convertir le chemin Linux en chemin Windows pour Screaming Frog
-        linux_path = os.path.abspath(self.config['export_path'])
-        
-        # Convertir le chemin WSL en chemin Windows
-        try:
-            # Utiliser wslpath pour convertir le chemin Linux en chemin Windows
-            result = subprocess.run(['wslpath', '-w', linux_path], 
-                                  capture_output=True, text=True, check=True)
-            windows_path = result.stdout.strip()
-            output_folder = windows_path
-            print(f"🔍 Chemin converti Linux → Windows: '{linux_path}' → '{windows_path}'")
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # Si wslpath n'est pas disponible, essayer une conversion manuelle
-            if linux_path.startswith('/home/'):
-                # Convertir /home/user/... vers C:\Users\user\...
-                parts = linux_path.split('/')
-                if len(parts) >= 3:
-                    windows_path = f"C:\\Users\\{parts[2]}" + "\\".join([''] + parts[3:])
-                    output_folder = windows_path
-                    print(f"🔍 Conversion manuelle: '{linux_path}' → '{windows_path}'")
-                else:
-                    output_folder = linux_path
-                    print(f"⚠️  Impossible de convertir le chemin, utilisation du chemin Linux")
-            else:
-                output_folder = linux_path
-                print(f"⚠️  Chemin non standard, utilisation du chemin Linux")
-        
-        print(f"🔍 Chemin final utilisé: '{output_folder}'")
+        # Utiliser le chemin absolu pour le dossier d'export
+        output_folder = os.path.abspath(self.config['export_path'])
+        print(f"🔍 Chemin d'export utilisé: '{output_folder}'")
         
         # Vérifier si les fonctionnalités sémantiques sont disponibles
         semantic_exports = ""
         if self.config.get('enable_semantic_analysis', False):
             semantic_exports = ",Embeddings:All,Content Clusters:Similar Pages"
             print("🧠 Analyse sémantique activée (nécessite SF v22+ et API AI configurée)")
-        
-        crawl_command = [
-            sf_path,
-            "-headless",
-            "-crawl", website_url,
-            "--output-folder", output_folder,
-            "--export-format", "csv",
-            "--bulk-export", f"All Outlinks,All Inlinks{semantic_exports}"
-        ]
-        
-        print(f"🔧 Commande complète: {' '.join(crawl_command)}")
-        print(f"🔧 Commande masquée: {' '.join(crawl_command[:3])} [...]")
-        
-        try:
-            print("⏳ Crawl en cours...")
-            print("💡 Monitoring en temps réel :")
-            
-            # Lancer le processus sans capturer la sortie pour voir le feedback
-            process = subprocess.Popen(
-                crawl_command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=False,  # Mode binaire pour gérer l'encodage manuellement
-                cwd=os.path.dirname(sf_path),
-                bufsize=1
-            )
-            
-            # Afficher la sortie en temps réel
-            output_lines = []
-            start_time = time.time()
-            last_update = start_time
-            initial_files = set(os.listdir(output_folder)) if os.path.exists(output_folder) else set()
-            
-            print("📝 Logs Screaming Frog:")
-            print("-" * 50)
-            
-            while True:
-                raw_line = process.stdout.readline()
-                if not raw_line and process.poll() is not None:
-                    break
-                
-                # Gérer l'encodage avec plusieurs tentatives
-                line = ""
-                for encoding in ['utf-8', 'latin-1', 'cp1252', 'ascii']:
-                    try:
-                        line = raw_line.decode(encoding).strip()
+
+        # Essayer différentes configurations en cas d'échec
+        for attempt in range(1, max_attempts + 1):
+            print(f"\n🔄 Tentative {attempt}/{max_attempts}")
+
+            # Créer une configuration temporaire avec user-agent personnalisé
+            config_file = self.create_screaming_frog_config(attempt_number=attempt)
+            if not config_file:
+                continue
+
+            crawl_command = [
+                sf_path,
+                "--headless",
+                "--crawl", website_url,
+                "--config", config_file,
+                "--output-folder", output_folder,
+                "--export-format", "csv",
+                "--bulk-export", f"All Outlinks,All Inlinks{semantic_exports}"
+            ]
+
+            print(f"🔧 Commande complète: {' '.join(crawl_command[:6])} [...]")
+            print(f"🔧 Config utilisée: {config_file}")
+
+            try:
+                print("⏳ Crawl en cours...")
+                print("💡 Monitoring en temps réel :")
+
+                # Lancer le processus sans capturer la sortie pour voir le feedback
+                process = subprocess.Popen(
+                    crawl_command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=False,  # Mode binaire pour gérer l'encodage manuellement
+                    bufsize=1
+                )
+
+                # Afficher la sortie en temps réel
+                output_lines = []
+                start_time = time.time()
+                last_update = start_time
+                initial_files = set(os.listdir(output_folder)) if os.path.exists(output_folder) else set()
+
+                print("📝 Logs Screaming Frog:")
+                print("-" * 50)
+
+                while True:
+                    raw_line = process.stdout.readline()
+                    if not raw_line and process.poll() is not None:
                         break
-                    except UnicodeDecodeError:
-                        continue
-                
-                if line:
-                    output_lines.append(line)
-                    # Afficher seulement les lignes importantes
-                    if any(keyword in line.lower() for keyword in [
-                        'crawling', 'found', 'discovered', 'completed', 'error', 
-                        'finished', 'exported', 'links', 'pages', 'progress', 'update'
-                    ]):
-                        print(f"📋 {line}")
-                
-                # Afficher un indicateur de progression toutes les 30 secondes
-                current_time = time.time()
-                if current_time - last_update > 30:
-                    elapsed = int(current_time - start_time)
-                    
-                    # Vérifier les nouveaux fichiers créés
-                    if os.path.exists(output_folder):
-                        current_files = set(os.listdir(output_folder))
-                        new_files = current_files - initial_files
-                        if new_files:
-                            print(f"📁 Nouveaux fichiers: {', '.join(new_files)}")
-                    
-                    print(f"⏱️  Temps écoulé: {elapsed//60}m {elapsed%60}s - Crawl en cours...")
-                    last_update = current_time
-            
-            # Attendre la fin du processus
-            return_code = process.wait()
-            total_time = int(time.time() - start_time)
-            
-            print("-" * 50)
-            print(f"⏱️  Durée totale: {total_time//60}m {total_time%60}s")
-            
-            # Créer un objet result compatible
-            class MockResult:
-                def __init__(self, returncode, stdout_lines):
-                    self.returncode = returncode
-                    self.stdout = '\n'.join(stdout_lines)
-                    self.stderr = ''
-            
-            result = MockResult(return_code, output_lines)
-            
-            # Diagnostic détaillé
-            if result.returncode == 0:
-                print("✅ Crawl terminé avec succès")
-                
-                # Chercher le fichier CSV créé dans le dossier d'export
-                csv_files = []
-                if os.path.exists(self.config['export_path']):
-                    all_files = os.listdir(self.config['export_path'])
-                    csv_files = [f for f in all_files if f.endswith('.csv') and ('outlink' in f.lower() or 'liens_sortants' in f.lower())]
-                    
-                    print(f"📁 Fichiers créés dans {self.config['export_path']}:")
-                    for f in all_files:
-                        print(f"  - {f}")
-                
-                if csv_files:
-                    latest_file = max([f"{self.config['export_path']}{f}" for f in csv_files], key=lambda x: os.path.getctime(x))
-                    print(f"📄 Fichier CSV des liens: {latest_file}")
-                    return latest_file
+
+                    # Gérer l'encodage avec plusieurs tentatives
+                    line = ""
+                    for encoding in ['utf-8', 'latin-1', 'cp1252', 'ascii']:
+                        try:
+                            line = raw_line.decode(encoding).strip()
+                            break
+                        except UnicodeDecodeError:
+                            continue
+
+                    if line:
+                        output_lines.append(line)
+                        # Afficher seulement les lignes importantes
+                        if any(keyword in line.lower() for keyword in [
+                            'crawling', 'found', 'discovered', 'completed', 'error',
+                            'finished', 'exported', 'links', 'pages', 'progress', 'update'
+                        ]):
+                            print(f"📋 {line}")
+
+                    # Afficher un indicateur de progression toutes les 30 secondes
+                    current_time = time.time()
+                    if current_time - last_update > 30:
+                        elapsed = int(current_time - start_time)
+
+                        # Vérifier les nouveaux fichiers créés
+                        if os.path.exists(output_folder):
+                            current_files = set(os.listdir(output_folder))
+                            new_files = current_files - initial_files
+                            if new_files:
+                                print(f"📁 Nouveaux fichiers: {', '.join(new_files)}")
+
+                        print(f"⏱️  Temps écoulé: {elapsed//60}m {elapsed%60}s - Crawl en cours...")
+                        last_update = current_time
+
+                # Attendre la fin du processus
+                return_code = process.wait()
+                total_time = int(time.time() - start_time)
+
+                print("-" * 50)
+                print(f"⏱️  Durée totale: {total_time//60}m {total_time%60}s")
+
+                # Créer un objet result compatible
+                class MockResult:
+                    def __init__(self, returncode, stdout_lines):
+                        self.returncode = returncode
+                        self.stdout = '\n'.join(stdout_lines)
+                        self.stderr = ''
+
+                result = MockResult(return_code, output_lines)
+
+                # Diagnostic détaillé
+                if result.returncode == 0:
+                    print("✅ Crawl terminé avec succès")
+
+                    # Chercher le fichier CSV créé dans le dossier d'export
+                    csv_files = []
+                    if os.path.exists(self.config['export_path']):
+                        all_files = os.listdir(self.config['export_path'])
+                        csv_files = [f for f in all_files if f.endswith('.csv') and ('outlink' in f.lower() or 'liens_sortants' in f.lower())]
+
+                        print(f"📁 Fichiers créés dans {self.config['export_path']}:")
+                        for f in all_files:
+                            print(f"  - {f}")
+
+                    if csv_files:
+                        latest_file = max([f"{self.config['export_path']}{f}" for f in csv_files], key=lambda x: os.path.getctime(x))
+                        print(f"📄 Fichier CSV des liens: {latest_file}")
+                        # Nettoyer le fichier de config temporaire
+                        if config_file and os.path.exists(config_file):
+                            os.unlink(config_file)
+                        return latest_file
+                    else:
+                        print("⚠️  Fichier CSV des liens non trouvé")
+                        print("💡 Le crawl a peut-être échoué ou aucun lien trouvé")
+                        # Nettoyer le fichier de config temporaire
+                        if config_file and os.path.exists(config_file):
+                            os.unlink(config_file)
+                        return None
                 else:
-                    print("⚠️  Fichier CSV des liens non trouvé")
-                    print("💡 Le crawl a peut-être échoué ou aucun lien trouvé")
-                    return None
-            else:
-                print(f"❌ Erreur lors du crawl (code: {result.returncode})")
-                
-                # Analyser les logs pour identifier les problèmes
-                output_text = result.stdout.lower()
-                
-                print(f"\n🔍 DEBUG - Code de retour: {result.returncode}")
-                print(f"🔍 DEBUG - Taille de sortie: {len(result.stdout)} caractères")
+                    print(f"❌ Erreur lors du crawl (code: {result.returncode})")
+
+                    # Analyser les logs pour identifier les problèmes
+                    output_text = result.stdout.lower()
+
+                    print(f"\n🔍 DEBUG - Code de retour: {result.returncode}")
+                    print(f"🔍 DEBUG - Taille de sortie: {len(result.stdout)} caractères")
                 
                 # Rechercher des indices dans les logs
                 if "403" in output_text or "forbidden" in output_text:
                     print("🚫 Erreur 403 Forbidden détectée")
-                    print("💡 Solutions possibles :")
-                    print("   - Le site bloque les crawlers/bots")
-                    print("   - Ajouter un User-Agent personnalisé dans la config SF")
-                    print("   - Vérifier si le site nécessite une authentification")
-                    print("   - Essayer avec une limite de vitesse plus lente")
+                    if attempt < max_attempts:
+                        print(f"🔄 Tentative avec un autre User-Agent ({attempt + 1}/{max_attempts})")
+                        # Nettoyer le fichier de config temporaire
+                        if config_file and os.path.exists(config_file):
+                            os.unlink(config_file)
+                        continue  # Passer à la tentative suivante
+                    else:
+                        print("❌ Toutes les tentatives ont échoué")
+                        print("💡 Solutions possibles :")
+                        print("   - Le site bloque tous les types de crawlers/bots")
+                        print("   - Vérifier si le site nécessite une authentification")
+                        print("   - Essayer avec une limite de vitesse plus lente")
+                        print("   - Contacter l'administrateur du site")
                 elif "404" in output_text or "not found" in output_text:
                     print("🔍 Erreur 404 - URL non trouvée")
                     print("💡 Vérifiez que l'URL de départ existe bien")
-                    print("💡 Test depuis WSL vers Windows - peut être un problème de réseau")
+                    # Cette erreur ne justifie pas une nouvelle tentative
+                    break
                     
                     # Test rapide de connectivité depuis WSL
                     try:
@@ -345,13 +407,42 @@ class CompleteLinkAuditor:
                         print(f"⚠️  Impossible de tester la connectivité: {e}")
                 elif "timeout" in output_text or "connection" in output_text:
                     print("⏰ Problème de connexion/timeout")
-                    print("💡 Le site met trop de temps à répondre")
+                    if attempt < max_attempts:
+                        print(f"🔄 Nouvelle tentative avec délai plus long ({attempt + 1}/{max_attempts})")
+                        if config_file and os.path.exists(config_file):
+                            os.unlink(config_file)
+                        time.sleep(5)  # Attendre un peu avant la nouvelle tentative
+                        continue
+                    else:
+                        print("💡 Le site met trop de temps à répondre de façon répétée")
                 elif "license" in output_text:
                     print("📄 Problème de licence Screaming Frog")
                     print("💡 Vérifiez votre licence ou utilisez la version gratuite")
+                    break  # Pas de tentative supplémentaire pour un problème de licence
                 elif "memory" in output_text or "heap" in output_text:
                     print("💾 Problème de mémoire")
                     print("💡 Augmentez la mémoire allouée à Screaming Frog")
+                    break  # Pas de tentative supplémentaire pour un problème de mémoire
+                elif "rate limit" in output_text or "too many requests" in output_text:
+                    print("🚦 Limite de taux détectée")
+                    if attempt < max_attempts:
+                        wait_time = attempt * 10  # Attendre de plus en plus longtemps
+                        print(f"🔄 Attente de {wait_time}s avant la tentative {attempt + 1}/{max_attempts}")
+                        if config_file and os.path.exists(config_file):
+                            os.unlink(config_file)
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        print("💡 Le site applique une limite de taux très stricte")
+                elif "blocked" in output_text or "banned" in output_text:
+                    print("🚫 Site bloquant activement les requêtes")
+                    if attempt < max_attempts:
+                        print(f"🔄 Tentative avec un User-Agent différent ({attempt + 1}/{max_attempts})")
+                        if config_file and os.path.exists(config_file):
+                            os.unlink(config_file)
+                        continue
+                    else:
+                        print("💡 Le site bloque systématiquement les tentatives d'accès")
                 
                 # Afficher une partie des logs pour diagnostic
                 if result.stdout:
@@ -371,19 +462,47 @@ class CompleteLinkAuditor:
                             print(f"⚠️  Tentative d'analyse du fichier partiel: {latest_file}")
                             return latest_file
                 
+                # Nettoyer le fichier de config temporaire
+                if config_file and os.path.exists(config_file):
+                    os.unlink(config_file)
+
+            except subprocess.TimeoutExpired:
+                print("⏰ Crawl interrompu (timeout après 1h)")
+                print("💡 Le site est peut-être trop volumineux, essayez avec une limite de pages")
+                # Nettoyer le fichier de config temporaire
+                if config_file and os.path.exists(config_file):
+                    os.unlink(config_file)
+                if attempt < max_attempts:
+                    print(f"🔄 Nouvelle tentative avec timeout ({attempt + 1}/{max_attempts})")
+                    continue
                 return None
-                
-        except subprocess.TimeoutExpired:
-            print("⏰ Crawl interrompu (timeout après 1h)")
-            print("💡 Le site est peut-être trop volumineux, essayez avec une limite de pages")
-            return None
-        except FileNotFoundError:
-            print(f"❌ Exécutable non trouvé: {sf_path}")
-            print("💡 Vérifiez l'installation et le chemin de Screaming Frog")
-            return None
-        except Exception as e:
-            print(f"❌ Erreur inattendue: {e}")
-            return None
+
+            except FileNotFoundError:
+                print(f"❌ Exécutable non trouvé: {sf_path}")
+                print("💡 Vérifiez l'installation et le chemin de Screaming Frog")
+                # Nettoyer le fichier de config temporaire
+                if config_file and os.path.exists(config_file):
+                    os.unlink(config_file)
+                return None
+
+            except Exception as e:
+                print(f"❌ Erreur inattendue lors de la tentative {attempt}: {e}")
+                # Nettoyer le fichier de config temporaire
+                if config_file and os.path.exists(config_file):
+                    os.unlink(config_file)
+                if attempt < max_attempts:
+                    print(f"🔄 Nouvelle tentative ({attempt + 1}/{max_attempts})")
+                    continue
+                return None
+
+            # Si on arrive ici avec succès, nettoyer le fichier de config et retourner
+            if config_file and os.path.exists(config_file):
+                os.unlink(config_file)
+            break  # Sortir de la boucle de retry en cas de succès
+
+        # Si toutes les tentatives ont échoué
+        print("❌ Toutes les tentatives de crawl ont échoué")
+        return None
 
     def load_csv_file(self, csv_path):
         """Charge un fichier CSV avec gestion d'erreur robuste"""
