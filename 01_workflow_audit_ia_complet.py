@@ -148,13 +148,31 @@ class FinalIntelligentWorkflow:
             else:
                 sf_path = "/usr/bin/screamingfrogseospider"
 
+        # Modifier l'URL de départ si un filtre de section est spécifié
+        crawl_url = website_url
+        if section_filter:
+            # Construire l'URL avec la section pour limiter le crawl
+            from urllib.parse import urljoin
+            crawl_url = urljoin(website_url.rstrip('/') + '/', section_filter.lstrip('/'))
+            print(f"   🔍 Crawl limité à la section: {crawl_url}")
+
         command = [
             sf_path,
             '-headless',
-            '-crawl', website_url,
+            '-crawl', crawl_url,
             '--output-folder', './exports/',
             '--export-format', 'csv'
         ]
+
+        # Ajouter des filtres pour limiter le crawl à la section
+        if section_filter:
+            # Inclure seulement les URLs de la section
+            include_pattern = f"*{section_filter}*"
+            command.extend(['--include', include_pattern])
+            print(f"   📋 Pattern d'inclusion: {include_pattern}")
+
+            # Limiter la profondeur pour éviter de sortir de la section
+            command.extend(['--crawl-depth', '3'])
 
         # Utiliser la config IA si elle existe (désactivé temporairement pour debug)
         # if os.path.exists('./sf_content_config.xml'):
@@ -164,13 +182,6 @@ class FinalIntelligentWorkflow:
         command.extend(['--bulk-export', 'All Outlinks,Page Titles,H1-1,Word Count'])
 
         command.append('--overwrite')
-        
-        # Ajouter le filtre de section si spécifié
-        if section_filter:
-            # Pour SF, on peut utiliser des regex pour filtrer les URLs
-            print(f"   🔍 Filtre de section appliqué: {section_filter}")
-            # Note: SF n'a pas de filtre direct en ligne de commande
-            # On filtrera les résultats en post-traitement
             
         # Ajouter la limite de pages si spécifiée  
         if max_pages and max_pages.isdigit():
