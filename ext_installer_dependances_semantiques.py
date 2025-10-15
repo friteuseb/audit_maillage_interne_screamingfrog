@@ -99,7 +99,7 @@ def main():
             if test_success:
                 print("\n🎯 INSTALLATION TERMINÉE AVEC SUCCÈS !")
                 print("\n📋 Prochaines étapes :")
-                print("1. Relancez votre analyse avec : python audit_maillage.py")
+                print("1. Relancez votre analyse avec : python ext_audit_maillage_classique.py")
                 print("2. L'analyse sémantique sera automatiquement activée")
                 print("3. Le premier run sera plus lent (téléchargement du modèle)")
                 print("4. Les runs suivants utiliseront le cache pour plus de rapidité")

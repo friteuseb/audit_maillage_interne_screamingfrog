@@ -91,7 +91,7 @@ ANTHROPIC_MODEL=claude-3-haiku-20240307
 MAX_TOKENS=2000
 ```
 
-### 2. Configuration Audit (audit_config.json)
+### 2. Configuration Audit (ext_configuration_audit.json)
 ```json
 {
   "screaming_frog_path": "/chemin/vers/ScreamingFrogSEOSpiderCli.exe",
@@ -118,7 +118,7 @@ MAX_TOKENS=2000
 
 ### 1. Workflow Intelligent (Recommandé v3.0)
 ```bash
-python final_intelligent_workflow.py
+python 01_workflow_audit_ia_complet.py
 ```
 
 **Menu interactif** avec 4 options :
@@ -129,14 +129,14 @@ python final_intelligent_workflow.py
 
 ### 2. Script Principal (Classique)
 ```bash
-python audit_maillage.py
+python ext_audit_maillage_classique.py
 ```
 
 Menu interactif avec options traditionnelles.
 
 ### 3. Script Simple (CSV direct)
 ```bash
-python audit_simple_csv.py
+python ext_analyse_csv_simple.py
 ```
 
 ## 🤖 Workflow Intelligent v3.0
@@ -250,21 +250,22 @@ L'outil supporte les exports Screaming Frog avec colonnes :
 
 ```
 automate_internallinking_audit/
-├── final_intelligent_workflow.py    # 🆕 Workflow IA principal
-├── intelligent_content_detector.py  # 🆕 Détecteur IA Anthropic
-├── audit_maillage.py               # Script classique
-├── audit_simple_csv.py             # Script simple
-├── anthropic_analyzer.py           # 🆕 Analyseur Anthropic
-├── semantic_analyzer.py            # Analyseur sémantique CamemBERT
-├── .env.example                    # 🆕 Template configuration API
-├── .env                           # Configuration API (ignoré par Git)
-├── audit_config.json             # Configuration audit
-├── sf_content_config.xml          # 🆕 Config SF générée par IA
-├── exports/                       # Dossier de sortie
-│   ├── *.html                    # Rapports HTML
-│   ├── *.csv                     # Exports et recommandations  
-│   └── *.seospider              # Fichiers Screaming Frog
-└── README.md                     # Cette documentation
+├── 01_workflow_audit_ia_complet.py    # 🆕 Workflow IA principal
+├── ext_detecteur_contenu_ia.py        # 🆕 Détecteur IA Anthropic
+├── ext_audit_maillage_classique.py    # Script classique
+├── ext_analyse_csv_simple.py          # Script simple
+├── ext_analyseur_anthropic.py         # 🆕 Analyseur Anthropic
+├── ext_analyseur_semantique.py        # Analyseur sémantique CamemBERT
+├── ext_installer_dependances_semantiques.py # Script d'installation
+├── .env.example                   # 🆕 Template configuration API
+├── .env                          # Configuration API (ignoré par Git)
+├── ext_configuration_audit.json      # Configuration audit
+├── ext_config_screaming_frog.xml     # 🆕 Config SF générée par IA
+├── exports/                      # Dossier de sortie
+│   ├── *.html                   # Rapports HTML
+│   ├── *.csv                    # Exports et recommandations
+│   └── *.seospider             # Fichiers Screaming Frog
+└── README.md                    # Cette documentation
 ```
 
 ## 🆕 Fonctionnalités v3.0 - Intelligence Artificielle
@@ -329,7 +330,7 @@ automate_internallinking_audit/
 ### Pour un Audit Optimal avec IA
 1. **🔑 Configurez votre API Anthropic** dans `.env`
 2. **🎯 Choisissez votre section** : `/blogs/`, `/produits/`, etc.
-3. **🚀 Lancez le workflow intelligent** : `python final_intelligent_workflow.py`
+3. **🚀 Lancez le workflow intelligent** : `python 01_workflow_audit_ia_complet.py`
 4. **⚙️ Laissez l'IA analyser** : Détection automatique des structures
 5. **🕷️ SF crawle avec config optimisée** : XPath générés par IA
 6. **📊 Analysez le rapport final** : Visualisations et recommandations

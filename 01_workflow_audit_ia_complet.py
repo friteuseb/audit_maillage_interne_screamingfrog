@@ -10,7 +10,7 @@ import csv
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
-from intelligent_content_detector import IntelligentContentDetector
+from ext_detecteur_contenu_ia import IntelligentContentDetector
 import json
 import time
 import glob
@@ -469,11 +469,119 @@ class FinalIntelligentWorkflow:
             print(f"   ❌ Erreur génération rapport: {e}")
             return ""
     
+    def _validate_section_filter(self, section_input: str, website_url: str) -> str:
+        """Valider et nettoyer le filtre de section"""
+        if not section_input:
+            return ""
+
+        # Si c'est une URL complète, extraire le path
+        if section_input.startswith(('http://', 'https://')):
+            parsed = urlparse(section_input)
+            path = parsed.path.rstrip('/')
+            if path:
+                print(f"   📝 URL détectée, utilisation du path: {path}")
+                return path
+
+        # Nettoyer le path
+        section_filter = section_input.strip()
+
+        # S'assurer qu'il commence par /
+        if not section_filter.startswith('/'):
+            section_filter = '/' + section_filter
+
+        # Supprimer les trailing slashes
+        section_filter = section_filter.rstrip('/')
+
+        # Validation basique
+        if len(section_filter) > 1 and section_filter.count('/') <= 3:
+            return section_filter
+        else:
+            print(f"   ⚠️  Format de section invalide: {section_input}")
+            print(f"   💡 Exemples valides: /blog, /produits, /centre-dexpertise")
+            return ""
+
+    def _validate_section_filter(self, section_input: str, website_url: str) -> str:
+        """Valider et nettoyer le filtre de section"""
+        if not section_input:
+            return ""
+
+        # Si c'est une URL complète, extraire le path
+        if section_input.startswith(('http://', 'https://')):
+            parsed = urlparse(section_input)
+            path = parsed.path.rstrip('/')
+            if path:
+                print(f"   📝 URL détectée, utilisation du path: {path}")
+                return path
+
+        # Nettoyer le path
+        section_filter = section_input.strip()
+
+        # S'assurer qu'il commence par /
+        if not section_filter.startswith('/'):
+            section_filter = '/' + section_filter
+
+        # Supprimer les trailing slashes
+        section_filter = section_filter.rstrip('/')
+
+        # Validation basique
+        if len(section_filter) > 1 and section_filter.count('/') <= 3:
+            return section_filter
+        else:
+            print(f"   ⚠️  Format de section invalide: {section_input}")
+            print(f"   💡 Exemples valides: /blog, /produits, /centre-dexpertise")
+            return ""
+
     def launch_semantic_analysis(self, filtered_report_path: str) -> bool:
         """Lancer l'analyse sémantique avec génération du rapport HTML complet"""
-        
+
         if not os.path.exists(filtered_report_path):
             print(f"   ❌ Rapport filtré introuvable: {filtered_report_path}")
+            return False
+
+        print(f"   🚀 Lancement de l'analyse sémantique complète...")
+        print(f"   📄 Fichier source: {filtered_report_path}")
+
+        try:
+            # Import direct de l'analyseur sémantique pour avoir plus de contrôle
+            from ext_audit_maillage_classique import CompleteLinkAuditor
+
+            auditor = CompleteLinkAuditor()
+
+            # Analyser le fichier CSV filtré avec génération complète du rapport HTML
+            print(f"   📊 Analyse des données avec CamemBERT...")
+            report_path = auditor.analyze_csv(filtered_report_path)
+
+            if report_path:
+                print(f"   ✅ Rapport HTML complet généré: {report_path}")
+                print(f"   📊 Incluant: graphique des nœuds, clusters sémantiques, recommandations")
+                return True
+            else:
+                print(f"   ⚠️  Analyse terminée mais rapport non généré")
+                return False
+
+        except ImportError:
+            print(f"   ⚠️  Import de l'analyseur sémantique échoué, utilisation du subprocess...")
+            # Fallback vers l'ancienne méthode
+            try:
+                result = subprocess.run([
+                    'python', 'ext_analyseur_semantique.py',
+                    '--csv-file', filtered_report_path
+                ], capture_output=True, text=True, timeout=300)
+
+                if result.returncode == 0:
+                    print(f"   ✅ Analyse sémantique terminée")
+                    return True
+                else:
+                    print(f"   ⚠️  Analyse terminée avec avertissements")
+                    return True
+
+            except Exception as e:
+                print(f"   ❌ Erreur subprocess: {e}")
+                return False
+
+        except Exception as e:
+            print(f"   ❌ Erreur analyse sémantique: {e}")
+            print(f"   💡 Vous pouvez lancer manuellement: python ext_audit_maillage_classique.py --csv-file {filtered_report_path}")
             return False
         
         print(f"   🚀 Lancement de l'analyse sémantique complète...")
@@ -481,7 +589,7 @@ class FinalIntelligentWorkflow:
         
         try:
             # Import direct de l'analyseur sémantique pour avoir plus de contrôle
-            from audit_maillage import CompleteLinkAuditor
+            from ext_audit_maillage_classique import CompleteLinkAuditor
             
             auditor = CompleteLinkAuditor()
             
@@ -502,7 +610,7 @@ class FinalIntelligentWorkflow:
             # Fallback vers l'ancienne méthode
             try:
                 result = subprocess.run([
-                    'python', 'audit_maillage.py', 
+                    'python', 'ext_audit_maillage_classique.py',
                     '--csv-file', filtered_report_path
                 ], capture_output=True, text=True, timeout=300)
                 
@@ -519,7 +627,7 @@ class FinalIntelligentWorkflow:
         
         except Exception as e:
             print(f"   ❌ Erreur analyse sémantique: {e}")
-            print(f"   💡 Vous pouvez lancer manuellement: python audit_maillage.py --csv-file {filtered_report_path}")
+            print(f"   💡 Vous pouvez lancer manuellement: python ext_audit_maillage_classique.py --csv-file {filtered_report_path}")
             return False
 
 def main():
@@ -537,7 +645,8 @@ def main():
     print("4. ❌ Quitter")
     
     choice = input("\nVotre choix (1-4): ").strip()
-    
+    result = None
+
     if choice == "1":
         website_url = input("🌐 URL du site à analyser: ").strip()
         if not website_url:
@@ -546,7 +655,11 @@ def main():
         
         # Options avancées
         print("\n🔧 Options avancées (optionnel):")
-        section_filter = input("📂 Analyser seulement une section (ex: /blog/, /produits/): ").strip()
+        section_filter_raw = input("📂 Analyser seulement une section (ex: /blog/, /produits/): ").strip()
+
+        # Validation et nettoyage du filtre de section
+        section_filter = self._validate_section_filter(section_filter_raw, website_url)
+
         max_pages = input("📊 Limite de pages (défaut: illimité): ").strip()
         
         print(f"\n🚀 Lancement de l'analyse de {website_url}")
@@ -610,7 +723,7 @@ def main():
         print(f"   2. Analysez les recommandations sémantiques")
         print(f"   3. Implémentez les améliorations de maillage interne")
         print(f"\n💡 Pour relancer l'analyse sémantique uniquement:")
-        print(f"   python audit_maillage.py --csv-file {result}")
+        print(f"   python ext_audit_maillage_classique.py --csv-file {result}")
     else:
         print(f"\n❌ ÉCHEC DU WORKFLOW")
         print(f"Vérifiez les messages d'erreur ci-dessus pour diagnostiquer le problème.")

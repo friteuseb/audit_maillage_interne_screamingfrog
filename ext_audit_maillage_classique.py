@@ -16,7 +16,7 @@ from collections import Counter
 
 # Import de l'analyseur sémantique
 try:
-    from semantic_analyzer import get_semantic_analyzer
+    from ext_analyseur_semantique import get_semantic_analyzer
     SEMANTIC_ANALYSIS_AVAILABLE = True
 except ImportError:
     SEMANTIC_ANALYSIS_AVAILABLE = False
@@ -24,17 +24,37 @@ from urllib.parse import urlparse
 import glob
 
 class CompleteLinkAuditor:
-    def __init__(self, config_file='audit_config.json'):
+    def __init__(self, config_file='ext_configuration_audit.json'):
         self.config = self.load_config(config_file)
         
     def load_config(self, config_file):
         """Charge la configuration"""
         import platform
+        import os
+
         # Détecter le système d'exploitation pour le chemin par défaut
-        if platform.system() == "Windows":
-            default_sf_path = "C:\\Program Files (x86)\\Screaming Frog SEO Spider\\ScreamingFrogSEOSpiderCli.exe"
-        else:  # Linux/macOS
-            default_sf_path = "/usr/bin/screamingfrogseospider"
+        system = platform.system()
+        if system == "Windows":
+            possible_paths = [
+                "C:\\Program Files\\Screaming Frog SEO Spider\\ScreamingFrogSEOSpiderCli.exe",
+                "C:\\Program Files (x86)\\Screaming Frog SEO Spider\\ScreamingFrogSEOSpiderCli.exe",
+                "C:\\Screaming Frog\\ScreamingFrogSEOSpiderCli.exe"
+            ]
+            default_sf_path = next((path for path in possible_paths if os.path.exists(path)), possible_paths[0])
+        elif system == "Darwin":  # macOS
+            possible_paths = [
+                "/Applications/Screaming Frog SEO Spider.app/Contents/MacOS/ScreamingFrogSEOSpiderCli",
+                "/usr/local/bin/screamingfrogseospider",
+                "/opt/homebrew/bin/screamingfrogseospider"
+            ]
+            default_sf_path = next((path for path in possible_paths if os.path.exists(path)), possible_paths[0])
+        else:  # Linux et autres
+            possible_paths = [
+                "/usr/bin/screamingfrogseospider",
+                "/usr/local/bin/screamingfrogseospider",
+                "/opt/screamingfrog/screamingfrogseospider"
+            ]
+            default_sf_path = next((path for path in possible_paths if os.path.exists(path)), possible_paths[0])
 
         default_config = {
             "screaming_frog_path": default_sf_path,
@@ -171,7 +191,7 @@ class CompleteLinkAuditor:
             print(f"❌ Screaming Frog non trouvé à: {sf_path}")
             print("\n💡 Solutions possibles:")
             print("1. Installer Screaming Frog SEO Spider")
-            print("2. Mettre à jour le chemin dans audit_config.json")
+            print("2. Mettre à jour le chemin dans ext_configuration_audit.json")
             print("3. Utiliser l'option 2 pour analyser un CSV existant")
             
             # Chemins alternatifs courants

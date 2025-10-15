@@ -4,17 +4,17 @@
     <extraction>
       <!-- Contenu principal -->
       <custom name="MainContent" 
-              xpath="//article//text() | //section[not(contains(@class, 'shopify-section-header-group') or contains(@class, 'shopify-section-footer-group'))]//text()"
+              xpath="normalize-space(string(//main[contains(@class,'product-main')] | //article[contains(@class,'product-entry')] | //section[contains(@class,'product-info')]))"
               type="text"/>
       
       <!-- Liens éditoriaux seulement -->
       <custom name="EditorialLinks" 
-              xpath="//article//a[not(contains(@class, 'button') or contains(@class, 'icon') or contains(@class, 'header__icon'))] | //section[not(contains(@class, 'shopify-section-header-group') or contains(@class, 'shopify-section-footer-group'))]//a[not(contains(@class, 'button') or contains(@class, 'icon') or contains(@class, 'header__icon'))]"
+              xpath="//main[contains(@class,'product-main')]//a[not(contains(@class,'button')) and not(contains(@class,'nav-top-link'))] | //article[contains(@class,'product-entry')]//a[not(contains(@class,'button')) and not(contains(@class,'nav-top-link'))] | //section[contains(@class,'product-info')]//a[not(contains(@class,'button')) and not(contains(@class,'nav-top-link'))]"
               type="links"/>
       
       <!-- Zone de contenu complète -->
       <custom name="ContentZone" 
-              xpath="//article | //section[not(contains(@class, 'shopify-section-header-group') or contains(@class, 'shopify-section-footer-group'))]"
+              xpath="//main[contains(@class,'product-main')] | //article[contains(@class,'product-entry')] | //section[contains(@class,'product-info')]"
               type="html"/>
     </extraction>
     

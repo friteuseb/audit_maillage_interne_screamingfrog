@@ -73,10 +73,10 @@ class IntelligentContentDetector:
             if section_urls:
                 print(f"   🎯 {len(section_urls)} pages trouvées dans {section_filter}")
                 # Prendre au MAXIMUM 4 pages de la section ciblée (limiter par taille échantillon)
-                section_sample_size = min(len(section_urls), max_samples - 1, 4)  
+                section_sample_size = min(len(section_urls), max_samples - 1, 4)
                 strategic_samples = self._strategic_page_selection(section_urls, section_sample_size)
                 sample_urls.extend(strategic_samples)
-                
+
                 # Ajouter SEULEMENT 1 page générale pour le contexte global (homepage uniquement)
                 remaining_slots = max_samples - len(sample_urls)
                 if remaining_slots > 0:
@@ -84,12 +84,26 @@ class IntelligentContentDetector:
                     homepage = website_url.rstrip('/') + '/'
                     if homepage not in sample_urls and remaining_slots >= 1:
                         sample_urls.insert(0, homepage)  # Homepage en premier pour contexte
-                
+
                 print(f"   📊 Répartition: {len([u for u in sample_urls if section_filter in u])} pages section / {len([u for u in sample_urls if section_filter not in u])} pages générales")
             else:
-                print(f"   ⚠️  Aucune page trouvée dans {section_filter}, échantillonnage général...")
-                strategic_samples = self._strategic_page_selection(all_urls, max_samples - 1)
-                sample_urls.extend(strategic_samples)
+                print(f"   ⚠️  Aucune page trouvée dans {section_filter} via sitemap, tentative de découverte approfondie...")
+                # Essayer de découvrir les pages de section par d'autres moyens
+                discovered_section_urls = self._discover_section_pages(website_url, section_filter)
+                if discovered_section_urls:
+                    print(f"   ✅ {len(discovered_section_urls)} pages de section découvertes")
+                    section_sample_size = min(len(discovered_section_urls), max_samples - 1, 4)
+                    strategic_samples = self._strategic_page_selection(discovered_section_urls, section_sample_size)
+                    sample_urls.extend(strategic_samples)
+
+                    # Ajouter homepage pour contexte
+                    homepage = website_url.rstrip('/') + '/'
+                    if homepage not in sample_urls:
+                        sample_urls.insert(0, homepage)
+                else:
+                    print(f"   ❌ Aucune page trouvée dans {section_filter}, échantillonnage général...")
+                    strategic_samples = self._strategic_page_selection(all_urls, max_samples - 1)
+                    sample_urls.extend(strategic_samples)
         else:
             strategic_samples = self._strategic_page_selection(all_urls, max_samples - 1)
             sample_urls.extend(strategic_samples)
@@ -190,6 +204,78 @@ class IntelligentContentDetector:
         else:
             return "Contenu spécifique"
     
+    def _discover_section_pages(self, website_url: str, section_filter: str) -> List[str]:
+        """Découvrir les pages d'une section spécifique par exploration approfondie"""
+        discovered_urls = []
+
+        try:
+            # 1. Essayer directement l'URL de section
+            section_url = urljoin(website_url, section_filter.lstrip('/'))
+            if self._test_url_exists(section_url):
+                discovered_urls.append(section_url)
+                print(f"   📍 Section trouvée: {section_url}")
+
+            # 2. Essayer des patterns communs pour cette section
+            base_url = website_url.rstrip('/')
+            common_patterns = [
+                f"{section_filter}/",  # /section/
+                f"{section_filter}",   # /section
+                f"{section_filter}/index.html",
+                f"{section_filter}/page/1/",
+                f"{section_filter}/1/",  # pagination
+            ]
+
+            for pattern in common_patterns:
+                test_url = urljoin(base_url, pattern.lstrip('/'))
+                if test_url not in discovered_urls and self._test_url_exists(test_url):
+                    discovered_urls.append(test_url)
+                    print(f"   📍 Pattern trouvé: {test_url}")
+
+            # 3. Explorer depuis la homepage pour trouver des liens vers la section
+            response = requests.get(website_url, timeout=10)
+            if response.status_code == 200 and BS4_AVAILABLE:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                links = soup.find_all('a', href=True)
+
+                base_domain = urlparse(website_url).netloc
+                for link in links:
+                    href = link['href']
+                    full_url = urljoin(website_url, href)
+
+                    if (base_domain in full_url and
+                        section_filter in full_url and
+                        full_url not in discovered_urls and
+                        not any(skip in full_url.lower() for skip in ['#', 'javascript:', 'mailto:'])):
+                        discovered_urls.append(full_url)
+                        if len(discovered_urls) >= 5:  # Limite pour éviter trop de requêtes
+                            break
+
+            # 4. Si toujours rien, essayer des recherches par mots-clés dans l'URL
+            if not discovered_urls:
+                # Essayer de deviner des URLs basées sur des mots-clés
+                keywords = section_filter.strip('/').split('-')
+                if keywords:
+                    # Essayer des combinaisons simples
+                    for keyword in keywords[:2]:  # Prendre max 2 mots-clés
+                        test_url = f"{base_url}/{keyword}/"
+                        if self._test_url_exists(test_url):
+                            discovered_urls.append(test_url)
+                            print(f"   📍 Mot-clé trouvé: {test_url}")
+
+        except Exception as e:
+            print(f"   ⚠️  Erreur découverte section: {e}")
+
+        return discovered_urls
+
+    def _test_url_exists(self, url: str) -> bool:
+        """Tester si une URL existe (HEAD request)"""
+        try:
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.head(url, headers=headers, timeout=5, allow_redirects=True)
+            return response.status_code < 400
+        except:
+            return False
+
     def _manual_deep_sampling(self, website_url: str) -> List[str]:
         """Échantillonnage manuel plus approfondi"""
         urls = []
@@ -285,16 +371,32 @@ class IntelligentContentDetector:
         
         return sample_urls
     
-    def analyze_content_structure_with_ai(self, sample_urls: List[str]) -> Dict:
+    def analyze_content_structure_with_ai(self, sample_urls: List[str], section_filter: str = "") -> Dict:
         """Analyser la structure des contenus avec Anthropic"""
         if not self.client:
             return {"error": "API Anthropic non disponible"}
-        
+
         print(f"🤖 Analyse IA de la structure de contenu...")
-        
-        # Récupérer le HTML de quelques pages
+
+        # Prioriser les pages de section si un filtre est spécifié
+        analysis_urls = sample_urls[:3]  # Par défaut les 3 premières
+
+        if section_filter:
+            section_pages = [url for url in sample_urls if section_filter in url]
+            general_pages = [url for url in sample_urls if section_filter not in url]
+
+            if section_pages:
+                # Prendre jusqu'à 2 pages de section + 1 page générale pour contexte
+                analysis_urls = section_pages[:2]
+                if general_pages and len(analysis_urls) < 3:
+                    analysis_urls.append(general_pages[0])  # Homepage pour contexte
+                print(f"   🎯 Priorisation des pages de section: {len(section_pages)} trouvées")
+            else:
+                print(f"   📝 Aucune page de section dans l'échantillon, analyse générale")
+
+        # Récupérer le HTML des pages sélectionnées
         html_samples = []
-        for url in sample_urls[:3]:  # Limiter à 3 pages pour l'IA
+        for url in analysis_urls:
             print(f"   📥 Récupération: {url}")
             html_content = self._fetch_html(url)
             if html_content:
@@ -304,7 +406,7 @@ class IntelligentContentDetector:
                     'url': url,
                     'html': cleaned_html[:6000]  # Limiter la taille
                 })
-            
+
             time.sleep(1)  # Rate limiting
         
         if not html_samples:
@@ -521,7 +623,7 @@ IMPORTANT : Privilégie la PRÉCISION sur la EXHAUSTIVITÉ. Mieux vaut identifie
             
             # Étape 2 : Analyse IA
             print(f"\n🤖 ÉTAPE 2: Analyse IA de la structure")
-            ai_analysis = self.analyze_content_structure_with_ai(sample_urls)
+            ai_analysis = self.analyze_content_structure_with_ai(sample_urls, section_filter)
             
             if "error" in ai_analysis:
                 results["errors"].append(f"Analyse IA: {ai_analysis['error']}")
