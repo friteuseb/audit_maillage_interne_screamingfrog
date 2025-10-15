@@ -4,17 +4,17 @@
     <extraction>
       <!-- Contenu principal -->
       <custom name="MainContent" 
-              xpath="//article[@class='post-12027']//h1 | //article[@class='post-12027']//p"
+              xpath="//article[contains(@class, 'entry-content')]/descendant::text()"
               type="text"/>
       
       <!-- Liens éditoriaux seulement -->
       <custom name="EditorialLinks" 
-              xpath="//article[@class='post-12027']//a[not(contains(@class, 'button') or contains(@class, 'nav-') or contains(@class, 'header-') or contains(@href, 'product-category'))]"
+              xpath="//article[contains(@class, 'entry-content')]//a[not(ancestor::header) and not(ancestor::footer) and not(ancestor::nav) and not(ancestor::aside)]"
               type="links"/>
       
       <!-- Zone de contenu complète -->
       <custom name="ContentZone" 
-              xpath="//article[@class='post-12027']"
+              xpath="//article[contains(@class, 'entry-content')]"
               type="html"/>
     </extraction>
     

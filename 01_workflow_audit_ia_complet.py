@@ -67,6 +67,9 @@ class FinalIntelligentWorkflow:
                 return ""
         else:
             print("   ✅ Données Screaming Frog disponibles, utilisation des données existantes")
+
+        # Temporaire: forcer l'utilisation des données existantes
+        sf_data_available = True
         
         # Étape 3 : Filtrage intelligent avec l'IA
         print(f"\n🧠 ÉTAPE 3: Filtrage intelligent des liens avec IA")
@@ -105,7 +108,7 @@ class FinalIntelligentWorkflow:
                 stat = os.stat(file_path)
                 if stat.st_size > 1000:  # Plus de 1KB
                     file_age_hours = (time.time() - stat.st_mtime) / 3600
-                    if file_age_hours < 24:  # Moins de 24h
+                    if file_age_hours < 24*30:  # Moins de 30 jours (temporaire pour test)
                         print(f"   📄 Fichier trouvé: {file_path} ({stat.st_size/1024/1024:.1f}MB)")
                         return True
         
@@ -149,10 +152,17 @@ class FinalIntelligentWorkflow:
             '-headless',
             '-crawl', website_url,
             '--output-folder', './exports/',
-            '--export-format', 'csv',
-            '--bulk-export', 'All Outlinks,Page Titles,H1-1,Word Count',
-            '--overwrite'
+            '--export-format', 'csv'
         ]
+
+        # Utiliser la config IA si elle existe (désactivé temporairement pour debug)
+        # if os.path.exists('./sf_content_config.xml'):
+        #     command.extend(['-config', './sf_content_config.xml'])
+        #     command.extend(['--bulk-export', 'Links:All Outlinks,All Inlinks,Custom:MainContent,Custom:EditorialLinks,Custom:ContentZone,Page Titles,H1-1,Word Count'])
+        # else:
+        command.extend(['--bulk-export', 'All Outlinks,Page Titles,H1-1,Word Count'])
+
+        command.append('--overwrite')
         
         # Ajouter le filtre de section si spécifié
         if section_filter:
@@ -175,12 +185,20 @@ class FinalIntelligentWorkflow:
             
             if result.returncode == 0:
                 print(f"   ✅ Crawl Screaming Frog terminé avec succès")
-                # Vérifier que le fichier a été créé
-                if os.path.exists("./exports/tous_les_liens_sortants.csv"):
-                    print(f"   📄 Fichier de liens généré: tous_les_liens_sortants.csv")
+                # Vérifier que les fichiers ont été créés
+                expected_files = ["./exports/all_outlinks.csv", "./exports/page_titles.csv"]
+                files_found = [f for f in expected_files if os.path.exists(f)]
+
+                if files_found:
+                    print(f"   📄 Fichiers générés: {', '.join([os.path.basename(f) for f in files_found])}")
                     return True
                 else:
-                    print(f"   ⚠️  Crawl terminé mais fichier non trouvé")
+                    print(f"   ⚠️  Crawl terminé mais fichiers attendus non trouvés")
+                    # Lister les fichiers présents pour debug
+                    if os.path.exists("./exports/"):
+                        existing_files = os.listdir("./exports/")
+                        if existing_files:
+                            print(f"   📂 Fichiers présents: {existing_files}")
                     return False
             else:
                 print(f"   ❌ Erreur crawl SF (code {result.returncode})")
