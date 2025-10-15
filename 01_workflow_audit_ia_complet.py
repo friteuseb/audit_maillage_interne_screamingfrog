@@ -113,12 +113,39 @@ class FinalIntelligentWorkflow:
     
     def run_screaming_frog_crawl(self, website_url: str, section_filter: str = "", max_pages: str = "") -> bool:
         """Exécuter le crawl Screaming Frog optimisé avec filtres"""
-        
+
         # Nettoyer les anciens fichiers (supprimer données SF)
         self.cleanup_old_files(preserve_sf_data=False)
-        
+
+        # Détecter le système et choisir le bon chemin
+        import platform
+        import os
+
+        system = platform.system()
+        if system == "Windows":
+            sf_path = "C:\\Program Files (x86)\\Screaming Frog SEO Spider\\ScreamingFrogSEOSpiderCli.exe"
+        elif system == "Darwin":  # macOS
+            sf_path = "/Applications/Screaming Frog SEO Spider.app/Contents/MacOS/ScreamingFrogSEOSpiderCli"
+        else:  # Linux et autres
+            # Détecter WSL
+            is_wsl = False
+            try:
+                if os.path.exists('/mnt/c'):
+                    is_wsl = True
+                elif os.path.exists('/proc/version'):
+                    with open('/proc/version', 'r') as f:
+                        if 'microsoft' in f.read().lower():
+                            is_wsl = True
+            except:
+                pass
+
+            if is_wsl:
+                sf_path = "/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe"
+            else:
+                sf_path = "/usr/bin/screamingfrogseospider"
+
         command = [
-            '/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe',
+            sf_path,
             '-headless',
             '-crawl', website_url,
             '--output-folder', './exports/',

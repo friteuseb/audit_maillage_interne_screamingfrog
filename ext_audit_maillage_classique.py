@@ -49,11 +49,32 @@ class CompleteLinkAuditor:
             ]
             default_sf_path = next((path for path in possible_paths if os.path.exists(path)), possible_paths[0])
         else:  # Linux et autres
-            possible_paths = [
-                "/usr/bin/screamingfrogseospider",
-                "/usr/local/bin/screamingfrogseospider",
-                "/opt/screamingfrog/screamingfrogseospider"
-            ]
+            # Détecter WSL (Windows Subsystem for Linux)
+            is_wsl = False
+            try:
+                if os.path.exists('/mnt/c'):
+                    is_wsl = True
+                elif os.path.exists('/proc/version'):
+                    with open('/proc/version', 'r') as f:
+                        if 'microsoft' in f.read().lower():
+                            is_wsl = True
+            except:
+                pass
+
+            if is_wsl:
+                # Chemins WSL (accès aux programmes Windows)
+                possible_paths = [
+                    "/mnt/c/Program Files/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe",
+                    "/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe",
+                    "C:\\Program Files\\Screaming Frog SEO Spider\\ScreamingFrogSEOSpiderCli.exe"
+                ]
+            else:
+                # Chemins Linux natif
+                possible_paths = [
+                    "/usr/bin/screamingfrogseospider",
+                    "/usr/local/bin/screamingfrogseospider",
+                    "/opt/screamingfrog/screamingfrogseospider"
+                ]
             default_sf_path = next((path for path in possible_paths if os.path.exists(path)), possible_paths[0])
 
         default_config = {

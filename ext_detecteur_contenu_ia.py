@@ -745,8 +745,33 @@ IMPORTANT : Privilégie la PRÉCISION sur la EXHAUSTIVITÉ. Mieux vaut identifie
     
     def _generate_sf_command(self, website_url: str, config_file: str) -> str:
         """Générer la commande Screaming Frog optimisée"""
-        
-        sf_path = '"/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe"'
+
+        # Détecter le système et choisir le bon chemin
+        import platform
+        import os
+
+        system = platform.system()
+        if system == "Windows":
+            sf_path = '"C:\\Program Files (x86)\\Screaming Frog SEO Spider\\ScreamingFrogSEOSpiderCli.exe"'
+        elif system == "Darwin":  # macOS
+            sf_path = '"/Applications/Screaming Frog SEO Spider.app/Contents/MacOS/ScreamingFrogSEOSpiderCli"'
+        else:  # Linux et autres
+            # Détecter WSL
+            is_wsl = False
+            try:
+                if os.path.exists('/mnt/c'):
+                    is_wsl = True
+                elif os.path.exists('/proc/version'):
+                    with open('/proc/version', 'r') as f:
+                        if 'microsoft' in f.read().lower():
+                            is_wsl = True
+            except:
+                pass
+
+            if is_wsl:
+                sf_path = '"/mnt/c/Program Files (x86)/Screaming Frog SEO Spider/ScreamingFrogSEOSpiderCli.exe"'
+            else:
+                sf_path = '"/usr/bin/screamingfrogseospider"'
         
         command = f"""{sf_path} \\
   -headless \\
