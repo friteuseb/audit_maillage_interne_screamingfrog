@@ -457,6 +457,8 @@ RÈGLES CRITIQUES :
 2. NAVIGATION = header, menu, footer, sidebar, breadcrumb, pagination, liens "en savoir plus"
 3. Préférer les balises sémantiques (main, article, section) aux classes CSS
 4. XPath doit être RESTRICTIF plutôt que permissif (mieux vaut manquer quelques liens que inclure la navigation)
+5. ÉVITER ABSOLUMENT les identifiants uniques (post-1234, article-567, id="content-789") - utiliser UNIQUEMENT des patterns généraux qui fonctionnent sur TOUTES les pages similaires
+6. Si une classe contient un numéro, c'est probablement unique - l'ignorer et utiliser la balise seule
 
 PAGES À ANALYSER :
 """
@@ -526,7 +528,38 @@ RÉPONSE OBLIGATOIRE (JSON uniquement) :
 IMPORTANT : Privilégie la PRÉCISION sur la EXHAUSTIVITÉ. Mieux vaut identifier 80% des vrais liens éditoriaux que d'inclure des liens de navigation."""
         
         return prompt
-    
+
+    def _generalize_xpath_patterns(self, content_zones: Dict) -> Dict:
+        """Généraliser les XPath trop spécifiques pour une meilleure universalité"""
+        import re
+
+        generalized = content_zones.copy()
+
+        for key in ['main_content_xpath', 'editorial_links_xpath', 'content_text_xpath']:
+            if key in generalized and generalized[key]:
+                xpath = generalized[key]
+
+                # Supprimer les identifiants uniques (post-1234, article-567, etc.)
+                xpath = re.sub(r'\[contains\(@class,\s*[\'"]\w+-\d+[\'"]\)\]', '', xpath)
+                xpath = re.sub(r'\[contains\(@id,\s*[\'"]\w+-\d+[\'"]\)\]', '', xpath)
+
+                # Nettoyer les doubles crochets
+                xpath = re.sub(r'\[\]\[', '[', xpath)
+                xpath = re.sub(r'\]\[\]', ']', xpath)
+
+                # Si le XPath devient trop vide, utiliser des fallbacks
+                if not xpath or xpath in ['//', '//*']:
+                    if key == 'main_content_xpath':
+                        xpath = '//main | //article | //[contains(@class, "content")] | //[contains(@class, "post")]'
+                    elif key == 'editorial_links_xpath':
+                        xpath = '//main//a | //article//a'
+                    elif key == 'content_text_xpath':
+                        xpath = '//main//text() | //article//text()'
+
+                generalized[key] = xpath
+
+        return generalized
+
     def _analyze_page_context(self, url: str) -> str:
         """Analyser le contexte d'une page pour aider l'IA"""
         
@@ -550,7 +583,10 @@ IMPORTANT : Privilégie la PRÉCISION sur la EXHAUSTIVITÉ. Mieux vaut identifie
         print(f"⚙️  Génération config Screaming Frog...")
         
         content_zones = ai_analysis["content_zones"]
-        
+
+        # Généraliser les XPath trop spécifiques
+        content_zones = self._generalize_xpath_patterns(content_zones)
+
         # Template XML pour Screaming Frog
         xml_config = f"""<?xml version="1.0" encoding="UTF-8"?>
 <seospiderconfig>
@@ -596,7 +632,7 @@ IMPORTANT : Privilégie la PRÉCISION sur la EXHAUSTIVITÉ. Mieux vaut identifie
             print(f"   ❌ Erreur sauvegarde: {e}")
             return ""
     
-    def run_intelligent_workflow(self, website_url: str, section_filter: str = "") -> Dict:
+    def run_intelligent_workflow(self, website_url: str, section_filter: str = "", sample_urls: Optional[List[str]] = None) -> Dict:
         """Exécuter le workflow complet"""
         print(f"🚀 WORKFLOW INTELLIGENT - {website_url}")
         print("=" * 60)
@@ -610,16 +646,21 @@ IMPORTANT : Privilégie la PRÉCISION sur la EXHAUSTIVITÉ. Mieux vaut identifie
         }
         
         try:
-            # Étape 1 : Échantillonnage stratégique
-            print(f"\n📊 ÉTAPE 1: Échantillonnage stratégique de pages")
-            sample_urls = self.sample_pages_strategically(website_url, max_samples=5, section_filter=section_filter)
-            
-            if not sample_urls:
-                results["errors"].append("Aucune page échantillonnée")
-                return results
-            
-            results["steps_completed"].append("sampling")
-            results["sample_urls"] = sample_urls
+            # Étape 1 : Échantillonnage stratégique ou URLs fournies
+            if sample_urls and len(sample_urls) > 0:
+                print(f"\n📊 ÉTAPE 1: Utilisation des URLs fournies ({len(sample_urls)} pages)")
+                results["steps_completed"].append("sampling")
+                results["sample_urls"] = sample_urls
+            else:
+                print(f"\n📊 ÉTAPE 1: Échantillonnage stratégique de pages")
+                sample_urls = self.sample_pages_strategically(website_url, max_samples=5, section_filter=section_filter)
+
+                if not sample_urls:
+                    results["errors"].append("Aucune page échantillonnée")
+                    return results
+
+                results["steps_completed"].append("sampling")
+                results["sample_urls"] = sample_urls
             
             # Étape 2 : Analyse IA
             print(f"\n🤖 ÉTAPE 2: Analyse IA de la structure")

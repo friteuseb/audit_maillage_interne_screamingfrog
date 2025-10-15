@@ -10,6 +10,7 @@ import csv
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
+from typing import List, Optional
 from ext_detecteur_contenu_ia import IntelligentContentDetector
 import json
 import time
@@ -24,7 +25,7 @@ class FinalIntelligentWorkflow:
         self.xpath_links = ""
         self.ai_analysis = {}
         
-    def run_complete_workflow(self, website_url: str, section_filter: str = "", max_pages: str = "") -> str:
+    def run_complete_workflow(self, website_url: str, section_filter: str = "", max_pages: str = "", sample_urls: Optional[List[str]] = None) -> str:
         """Workflow complet : IA → SF Crawl → Filtrage intelligent → Analyse sémantique"""
         print(f"🚀 WORKFLOW INTELLIGENT FINAL")
         print(f"Site: {website_url}")
@@ -38,7 +39,7 @@ class FinalIntelligentWorkflow:
         print(f"\n🤖 ÉTAPE 1: Analyse IA de la structure de contenu")
         print("-" * 50)
         
-        structure_analysis = self.detector.run_intelligent_workflow(website_url, section_filter)
+        structure_analysis = self.detector.run_intelligent_workflow(website_url, section_filter, sample_urls)
         
         if not structure_analysis.get('success'):
             print("❌ Échec de l'analyse IA")
@@ -468,37 +469,7 @@ class FinalIntelligentWorkflow:
         except Exception as e:
             print(f"   ❌ Erreur génération rapport: {e}")
             return ""
-    
-    def _validate_section_filter(self, section_input: str, website_url: str) -> str:
-        """Valider et nettoyer le filtre de section"""
-        if not section_input:
-            return ""
 
-        # Si c'est une URL complète, extraire le path
-        if section_input.startswith(('http://', 'https://')):
-            parsed = urlparse(section_input)
-            path = parsed.path.rstrip('/')
-            if path:
-                print(f"   📝 URL détectée, utilisation du path: {path}")
-                return path
-
-        # Nettoyer le path
-        section_filter = section_input.strip()
-
-        # S'assurer qu'il commence par /
-        if not section_filter.startswith('/'):
-            section_filter = '/' + section_filter
-
-        # Supprimer les trailing slashes
-        section_filter = section_filter.rstrip('/')
-
-        # Validation basique
-        if len(section_filter) > 1 and section_filter.count('/') <= 3:
-            return section_filter
-        else:
-            print(f"   ⚠️  Format de section invalide: {section_input}")
-            print(f"   💡 Exemples valides: /blog, /produits, /centre-dexpertise")
-            return ""
 
     def _validate_section_filter(self, section_input: str, website_url: str) -> str:
         """Valider et nettoyer le filtre de section"""
@@ -655,10 +626,17 @@ def main():
         
         # Options avancées
         print("\n🔧 Options avancées (optionnel):")
+        sample_urls_input = input("📄 URLs d'exemple pour analyser la structure (séparées par des virgules, ou vide pour auto): ").strip()
+
+        sample_urls = []
+        if sample_urls_input:
+            sample_urls = [url.strip() for url in sample_urls_input.split(',') if url.strip()]
+            print(f"   📝 {len(sample_urls)} URLs fournies pour l'analyse")
+
         section_filter_raw = input("📂 Analyser seulement une section (ex: /blog/, /produits/): ").strip()
 
         # Validation et nettoyage du filtre de section
-        section_filter = self._validate_section_filter(section_filter_raw, website_url)
+        section_filter = workflow._validate_section_filter(section_filter_raw, website_url)
 
         max_pages = input("📊 Limite de pages (défaut: illimité): ").strip()
         
@@ -668,7 +646,7 @@ def main():
         if max_pages:
             print(f"   📊 Limite: {max_pages} pages")
         
-        result = workflow.run_complete_workflow(website_url, section_filter, max_pages)
+        result = workflow.run_complete_workflow(website_url, section_filter, max_pages, sample_urls)
     
     elif choice == "2":
         csv_files = glob.glob("./exports/*.csv")
