@@ -25,6 +25,43 @@ class FinalIntelligentWorkflow:
         self.xpath_links = ""
         self.ai_analysis = {}
         
+    def fetch_and_parse_sitemap(self, sitemap_url: str) -> List[str]:
+        """Récupère et analyse un sitemap XML pour extraire les URLs"""
+        try:
+            import xml.etree.ElementTree as ET
+
+            print(f"   📥 Téléchargement du sitemap...")
+            response = requests.get(sitemap_url, timeout=30)
+            response.raise_for_status()
+
+            # Parser le XML
+            root = ET.fromstring(response.content)
+
+            urls = []
+            # Gérer les namespaces XML
+            ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
+
+            # Chercher les éléments <loc> (URLs)
+            for loc in root.findall('.//sm:loc', ns) or root.findall('.//loc'):
+                if loc.text:
+                    url = loc.text.strip()
+                    if url and url.startswith('http'):
+                        urls.append(url)
+
+            # Si pas d'URLs trouvées, essayer sans namespace
+            if not urls:
+                for loc in root.findall('.//loc'):
+                    if loc.text:
+                        url = loc.text.strip()
+                        if url and url.startswith('http'):
+                            urls.append(url)
+
+            return urls
+
+        except Exception as e:
+            print(f"   ❌ Erreur sitemap: {e}")
+            return []
+
     def run_complete_workflow(self, website_url: str, section_filter: str = "", max_pages: str = "", sample_urls: Optional[List[str]] = None) -> str:
         """Workflow complet : IA → SF Crawl → Filtrage intelligent → Analyse sémantique"""
         print(f"🚀 WORKFLOW INTELLIGENT FINAL")
@@ -670,9 +707,10 @@ def main():
     print("1. 🚀 Nouveau crawl intelligent (IA + Screaming Frog)")
     print("2. 📊 Analyser un CSV existant")
     print("3. ⚙️  Configuration IA seulement (générer config SF)")
-    print("4. ❌ Quitter")
+    print("4. 📄 Analyser via sitemap XML")
+    print("5. ❌ Quitter")
     
-    choice = input("\nVotre choix (1-4): ").strip()
+    choice = input("\nVotre choix (1-5): ").strip()
     result = None
 
     if choice == "1":
@@ -741,8 +779,34 @@ def main():
             print(structure_analysis.get('sf_command', 'Commande non disponible'))
         else:
             print("❌ Échec de la génération de configuration")
-            
+
     elif choice == "4":
+        sitemap_url = input("📄 URL du sitemap XML: ").strip()
+        if not sitemap_url:
+            print("❌ URL du sitemap requise")
+            return
+
+        print(f"📄 Analyse du sitemap: {sitemap_url}")
+
+        # Récupérer et analyser le sitemap
+        sitemap_urls = workflow.fetch_and_parse_sitemap(sitemap_url)
+        if not sitemap_urls:
+            print("❌ Impossible de récupérer ou analyser le sitemap")
+            return
+
+        print(f"   📝 {len(sitemap_urls)} URLs trouvées dans le sitemap")
+
+        # Extraire l'URL de base du site
+        from urllib.parse import urlparse
+        parsed = urlparse(sitemap_url)
+        website_url = f"{parsed.scheme}://{parsed.netloc}/"
+
+        print(f"   🌐 Site détecté: {website_url}")
+
+        # Lancer l'analyse avec les URLs du sitemap
+        result = workflow.run_complete_workflow(website_url, "", "", sitemap_urls)
+
+    elif choice == "5":
         print("👋 Au revoir!")
         return
     
