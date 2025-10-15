@@ -41,16 +41,22 @@ class FinalIntelligentWorkflow:
             # Gérer les namespaces XML
             ns = {'sm': 'http://www.sitemaps.org/schemas/sitemap/0.9'}
 
-            # Chercher les éléments <loc> (URLs)
-            for loc in root.findall('.//sm:loc', ns) or root.findall('.//loc'):
-                if loc.text:
-                    url = loc.text.strip()
-                    if url and url.startswith('http'):
-                        urls.append(url)
+            # Vérifier si c'est un sitemap index (contient des sous-sitemaps)
+            sitemap_locs = root.findall('.//sm:sitemap/sm:loc', ns) or root.findall('.//sitemap/loc')
 
-            # Si pas d'URLs trouvées, essayer sans namespace
-            if not urls:
-                for loc in root.findall('.//loc'):
+            if sitemap_locs:
+                # C'est un sitemap index, traiter récursivement les sous-sitemaps
+                print(f"   📂 Sitemap index détecté avec {len(sitemap_locs)} sous-sitemaps")
+                for sitemap_loc in sitemap_locs:
+                    if sitemap_loc.text:
+                        sub_sitemap_url = sitemap_loc.text.strip()
+                        print(f"   📄 Traitement du sous-sitemap: {sub_sitemap_url}")
+                        sub_urls = self.fetch_and_parse_sitemap(sub_sitemap_url)
+                        urls.extend(sub_urls)
+            else:
+                # C'est un sitemap de pages, extraire les URLs
+                # Chercher les éléments <loc> (URLs des pages)
+                for loc in root.findall('.//sm:url/sm:loc', ns) or root.findall('.//url/loc') or root.findall('.//loc'):
                     if loc.text:
                         url = loc.text.strip()
                         if url and url.startswith('http'):
