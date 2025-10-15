@@ -665,15 +665,32 @@ def main():
     result = None
 
     if choice == "1":
-        # Test temporaire avec données fixes
-        website_url = "https://www.jmdobel.fr/"
-        sample_urls = ["https://www.jmdobel.fr/centre-dexpertise/moteur-de-machine-a-coudre-electronique-vs-mecanique-le-guide/"]
-        section_filter = "/centre-dexpertise/"
-        max_pages = ""
+        website_url = input("🌐 URL du site à analyser: ").strip()
+        if not website_url:
+            print("❌ URL requise")
+            return
 
-        print(f"🚀 Lancement de l'analyse de {website_url}")
-        print(f"   📂 Section filtrée: {section_filter}")
-        print(f"   📝 URLs d'exemple: {sample_urls}")
+        # Options avancées
+        print("\n🔧 Options avancées (optionnel):")
+        sample_urls_input = input("📄 URLs d'exemple pour analyser la structure (séparées par des virgules, ou vide pour auto): ").strip()
+
+        sample_urls = []
+        if sample_urls_input:
+            sample_urls = [url.strip() for url in sample_urls_input.split(',') if url.strip()]
+            print(f"   📝 {len(sample_urls)} URLs fournies pour l'analyse")
+
+        section_filter_raw = input("📂 Analyser seulement une section (ex: /blog/, /produits/): ").strip()
+
+        # Validation et nettoyage du filtre de section
+        section_filter = workflow._validate_section_filter(section_filter_raw, website_url)
+
+        max_pages = input("📊 Limite de pages (défaut: illimité): ").strip()
+
+        print(f"\n🚀 Lancement de l'analyse de {website_url}")
+        if section_filter:
+            print(f"   📂 Section filtrée: {section_filter}")
+        if max_pages:
+            print(f"   📊 Limite: {max_pages} pages")
 
         result = workflow.run_complete_workflow(website_url, section_filter, max_pages, sample_urls)
     
