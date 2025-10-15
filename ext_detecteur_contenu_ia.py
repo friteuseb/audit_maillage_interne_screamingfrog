@@ -455,7 +455,7 @@ OBJECTIF : Analyser ces pages et créer des XPath universels qui fonctionneront 
 RÈGLES CRITIQUES :
 1. CONTENU ÉDITORIAL = texte informatif, articles, descriptions produits, blog posts
 2. NAVIGATION = header, menu, footer, sidebar, breadcrumb, pagination, liens "en savoir plus"
-3. Préférer les balises sémantiques (main, article, section) aux classes CSS
+3. PRÉFÉRER ABSOLUMENT les balises <article> pour le contenu éditorial - c'est la structure standard des blogs et contenus
 4. XPath doit être RESTRICTIF plutôt que permissif (mieux vaut manquer quelques liens que inclure la navigation)
 5. ÉVITER ABSOLUMENT les identifiants uniques (post-1234, article-567, id="content-789") - utiliser UNIQUEMENT des patterns généraux qui fonctionnent sur TOUTES les pages similaires
 6. Si une classe contient un numéro, c'est probablement unique - l'ignorer et utiliser la balise seule
@@ -594,18 +594,18 @@ IMPORTANT : Privilégie la PRÉCISION sur la EXHAUSTIVITÉ. Mieux vaut identifie
     <extraction>
       <!-- Contenu principal -->
       <custom name="MainContent" 
-              xpath="{content_zones.get('content_text_xpath', '//main//text() | //article//text()')}"
-              type="text"/>
-      
-      <!-- Liens éditoriaux seulement -->
-      <custom name="EditorialLinks" 
-              xpath="{content_zones.get('editorial_links_xpath', '//main//a | //article//a')}"
-              type="links"/>
-      
-      <!-- Zone de contenu complète -->
-      <custom name="ContentZone" 
-              xpath="{content_zones.get('main_content_xpath', '//main | //article')}"
-              type="html"/>
+               xpath="{content_zones.get('content_text_xpath', '//article//text()')}"
+               type="text"/>
+
+       <!-- Liens éditoriaux seulement -->
+       <custom name="EditorialLinks"
+               xpath="{content_zones.get('editorial_links_xpath', '//article//a')}"
+               type="links"/>
+
+       <!-- Zone de contenu complète -->
+       <custom name="ContentZone"
+               xpath="{content_zones.get('main_content_xpath', '//article')}"
+               type="html"/>
     </extraction>
     
     <!-- Paramètres optimisés -->

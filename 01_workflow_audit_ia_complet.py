@@ -92,8 +92,8 @@ class FinalIntelligentWorkflow:
             self.ai_analysis = structure_analysis.get('ai_analysis', {})
             content_zones = self.ai_analysis.get('content_zones', {})
 
-        self.xpath_content = content_zones.get('main_content_xpath', '//main')
-        self.xpath_links = content_zones.get('editorial_links_xpath', '//main//a')
+        self.xpath_content = content_zones.get('main_content_xpath', '//article')
+        self.xpath_links = content_zones.get('editorial_links_xpath', '//article//a')
 
         print(f"   ✅ XPath contenu détecté: {self.xpath_content}")
         print(f"   ✅ XPath liens éditoriaux: {self.xpath_links}")
